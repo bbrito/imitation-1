@@ -41,7 +41,7 @@ class AdversarialTrainer:
         discrim: discrim_nets.DiscrimNet,
         expert_data: Union[Iterable[Mapping], types.Transitions],
         expert_batch_size: int,
-        n_disc_updates_per_round: int = 2,
+        n_disc_updates_per_round: int = 1,
         *,
         log_dir: str = "output/",
         normalize_obs: bool = True,
@@ -102,7 +102,6 @@ class AdversarialTrainer:
                 the environment reward with the learned reward. This is useful for
                 sanity checking that the policy training is functional.
         """
-
         assert (
             logger.is_configured()
         ), "Requires call to imitation.util.logger.configure"
@@ -281,6 +280,21 @@ class AdversarialTrainer:
                 **learn_kwargs,
             )
             self._global_step += 1
+
+            # Get expert samples to compute MSE Imitation loss
+            expert_samples = self._next_expert_batch()
+            with th.no_grad():
+                # Compute value for the last timestep
+                obs_tensor = th.as_tensor(expert_samples['obs']).to(self.gen_algo.device)
+                actions_tensor = th.as_tensor(expert_samples['acts']).to(self.gen_algo.device)
+                actions, values, log_prob = self.gen_algo.policy.forward(obs_tensor,deterministic=True)
+
+            np_actions = actions.detach().numpy()
+            np_exp_actions = expert_samples['acts'].detach().numpy()
+
+            mse = np.mean(np.abs(np_actions-np_exp_actions))
+
+            logger.record("mean/gen/mse", mse)
 
         gen_samples = self.venv_buffering.pop_transitions()
         self._gen_replay_buffer.store(gen_samples)
