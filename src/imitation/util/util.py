@@ -3,6 +3,7 @@ import functools
 import itertools
 import os
 import uuid
+import glob
 from typing import (
     Callable,
     Iterable,
@@ -23,8 +24,6 @@ from stable_baselines3.common.base_class import BaseAlgorithm
 from stable_baselines3.common.policies import ActorCriticPolicy, BasePolicy
 from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv, VecEnv
 
-from imitation.data import wrappers
-
 
 def make_unique_timestamp() -> str:
     """Timestamp, with random uuid added to avoid collisions."""
@@ -33,6 +32,22 @@ def make_unique_timestamp() -> str:
     random_uuid = uuid.uuid4().hex[:6]
     return f"{timestamp}_{random_uuid}"
 
+def get_latest_run_id(log_path, env_id):
+    """
+    Returns the latest run number for the given log name and log path,
+    by finding the greatest number in the directories.
+
+    :param log_path: (str) path to log folder
+    :param env_id: (str)
+    :return: (int) latest run number
+    """
+    max_run_id = 0
+    for path in glob.glob(log_path + "/{}_[0-9]*".format(env_id)):
+        file_name = path.split("/")[-1]
+        ext = file_name.split("_")[-1]
+        if env_id == "_".join(file_name.split("_")[:-1]) and ext.isdigit() and int(ext) > max_run_id:
+            max_run_id = int(ext)
+    return max_run_id
 
 def make_vec_env(
     env_name: str,
@@ -96,7 +111,6 @@ def make_vec_env(
             log_path = os.path.join(log_subdir, f"mon{i:03d}")
 
         env = monitor.Monitor(env, log_path)
-        env = wrappers.RolloutInfoWrapper(env)
 
         if post_wrappers:
             for wrapper in post_wrappers:

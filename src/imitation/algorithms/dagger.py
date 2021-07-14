@@ -11,7 +11,7 @@ import dataclasses
 import logging
 import os
 from typing import Callable, Tuple, Union
-
+from copy import deepcopy
 import gym
 import numpy as np
 import torch as th
@@ -143,6 +143,8 @@ class InteractiveTrajectoryCollector(gym.Wrapper):
         """
         self.traj_accum = rollout.TrajectoryAccumulator()
         obs = self.env.reset()
+        print("reset")
+        print(obs.flags['WRITEABLE'])
         self._last_obs = obs
         self.traj_accum.add_step({"obs": obs})
         self._done_before = False
@@ -173,12 +175,18 @@ class InteractiveTrajectoryCollector(gym.Wrapper):
         else:
             actual_act = user_action
 
+        act = np.array(user_action)
+        act.setflags(write=1)
         # actually step the env & record data as appropriate
         next_obs, reward, done, info = self.env.step(actual_act)
+
         self._last_obs = next_obs
         self.traj_accum.add_step(
-            {"acts": user_action, "obs": next_obs, "rews": reward, "infos": info}
+            {"acts": act, "obs": next_obs, "rews": reward, "infos": info}
         )
+        print(next_obs.flags['WRITEABLE'])
+        print(reward.flags['WRITEABLE'])
+        print(act.flags['WRITEABLE'])
 
         # if we're finished, then save the trajectory & print a message
         if done and not self._done_before:

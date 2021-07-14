@@ -60,10 +60,7 @@ class EpochOrBatchIteratorWithProgress:
         n_epochs: Optional[int] = None,
         n_batches: Optional[int] = None,
         on_epoch_end: Optional[Callable[[], None]] = None,
-        samples_so_far: int = 0,
-        batch_num: int = 0,
-        epoch_num: int = 0,
-        stateful_iter: bool = False,
+        on_batch_end: Optional[Callable[[], None]] = None,
     ):
         """Wraps DataLoader so that all BC batches can be processed in a one for-loop.
 
@@ -77,6 +74,8 @@ class EpochOrBatchIteratorWithProgress:
                 __iter__. Exactly one of `n_epochs` and `n_batches` should be provided.
             on_epoch_end: A callback function without parameters to be called at the
                 end of every epoch.
+            on_batch_end: A callback function without parameters to be called at the
+                end of every batch.
         """
         if n_epochs is not None and n_batches is None:
             self.use_epochs = True
@@ -91,15 +90,8 @@ class EpochOrBatchIteratorWithProgress:
         self.n_epochs = n_epochs
         self.n_batches = n_batches
         self.on_epoch_end = on_epoch_end
-        self.samples_so_far = samples_so_far
-        self.batch_num = batch_num
-        self.epoch_num = epoch_num
-        self.stateful_iter = stateful_iter
+        self.on_batch_end = on_batch_end
 
-    def _reset_iter_state(self):
-        self.samples_so_far = 0
-        self.batch_num = 0
-        self.epoch_num = 0
 
     def __iter__(self) -> Iterable[Tuple[dict, dict]]:
         """Yields batches while updating tqdm display to display progress."""
@@ -137,6 +129,8 @@ class EpochOrBatchIteratorWithProgress:
                         samples_so_far=self.samples_so_far,
                     )
                     yield batch, stats
+                    if self.on_batch_end is not None:
+                        self.on_batch_end()
                     if not self.use_epochs:
                         update_desc()
                         display.update(1)
@@ -307,6 +301,7 @@ class BC:
         n_epochs: Optional[int] = None,
         n_batches: Optional[int] = None,
         on_epoch_end: Callable[[], None] = None,
+        on_batch_end: Callable[[], None] = None,
         log_interval: int = 100,
         samples_so_far: int = 0,
         batch_num: int = 0,
@@ -324,6 +319,8 @@ class BC:
                 Provide exactly one of `n_epochs` and `n_batches`.
             on_epoch_end: Optional callback with no parameters to run at the end of each
                 epoch.
+            on_batch_end: Optional callback with no parameters to run at the end of each
+                batch.
             log_interval: Log stats after every log_interval batches.
         """
         it = EpochOrBatchIteratorWithProgress(
@@ -331,10 +328,7 @@ class BC:
             n_epochs=n_epochs,
             n_batches=n_batches,
             on_epoch_end=on_epoch_end,
-            samples_so_far=samples_so_far,
-            batch_num=batch_num,
-            epoch_num=epoch_num,
-            stateful_iter=True,
+            on_batch_end=on_batch_end,
         )
 
         for batch, stats_dict_it in it:
