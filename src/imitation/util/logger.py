@@ -171,7 +171,7 @@ def configure(
     default_logger = sb_logger.Logger(folder, output_formats)
     hier_logger = _HierarchicalLogger(default_logger, format_strs)
     sb_logger.Logger.CURRENT = hier_logger
-    sb_logger.log("Logging to %s" % folder)
+    #sb_logger.log("Logging to %s" % folder)
     assert is_configured()
 
 

@@ -10,6 +10,7 @@ import torch.utils.data as th_data
 import torch.utils.tensorboard as thboard
 import tqdm
 from stable_baselines3.common import on_policy_algorithm, preprocessing, vec_env
+from stable_baselines3.common import utils, evaluation_old, logger_old
 
 from imitation.data import buffer, types, wrappers
 from imitation.rewards import common as rew_common
@@ -303,7 +304,7 @@ class AdversarialTrainer:
         self,
         total_timesteps: int,
         callback: Optional[Callable[[int], None]] = None,
-    ) -> None:
+        expert_rewards= None, env = None, eval_seeds = None) -> None:
         """Alternates between training the generator and discriminator.
 
         Every "round" consists of a call to `train_gen(self.gen_batch_size)`,
@@ -332,6 +333,21 @@ class AdversarialTrainer:
             if callback:
                 callback(r)
             logger.dump(self._global_step)
+            # add Lasses evaluation
+            all_rewards = []
+            for seed in eval_seeds:
+                env.seed(seed)
+                this_rewards, _ = evaluation_old.evaluate_policy(
+                    self.gen_algo, env, return_episode_rewards=True, n_eval_episodes=2
+                )
+                all_rewards += this_rewards
+            imitation_rewards = all_rewards
+            reward_gaps = [e - i for e, i in zip(expert_rewards, imitation_rewards)]
+            logger.record("comparable_measures/imitation_reward", np.mean(imitation_rewards))
+            logger.record("comparable_measures/mean_reward_gap", np.mean(reward_gaps))
+
+
+
 
     def _torchify_array(self, ndarray: np.ndarray, **kwargs) -> th.Tensor:
         return th.as_tensor(ndarray, device=self.discrim.device(), **kwargs)
