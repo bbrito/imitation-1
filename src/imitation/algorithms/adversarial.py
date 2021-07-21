@@ -343,8 +343,8 @@ class AdversarialTrainer:
                 all_rewards += this_rewards
             imitation_rewards = all_rewards
             reward_gaps = [e - i for e, i in zip(expert_rewards, imitation_rewards)]
-            logger.record("comparable_measures/imitation_reward", np.mean(imitation_rewards))
-            logger.record("comparable_measures/mean_reward_gap", np.mean(reward_gaps))
+            #logger.record("comparable_measures/imitation_reward", np.mean(imitation_rewards))
+            #logger.record("comparable_measures/mean_reward_gap", np.mean(reward_gaps))
 
 
 
