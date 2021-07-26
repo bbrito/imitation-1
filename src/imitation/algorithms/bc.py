@@ -118,8 +118,14 @@ class EpochOrBatchIteratorWithProgress:
         with contextlib.closing(display):
             while True:
                 update_desc()
+                got_data_on_epoch = False
                 for batch in self.data_loader:
+<<<<<<< HEAD
                     self.batch_num += 1
+=======
+                    got_data_on_epoch = True
+                    batch_num += 1
+>>>>>>> c9b21b895c9328df77c822aa654d1a24bec70af9
                     batch_size = len(batch["obs"])
                     assert batch_size > 0
                     self.samples_so_far += batch_size
@@ -136,7 +142,17 @@ class EpochOrBatchIteratorWithProgress:
                         display.update(1)
                         if self.batch_num - batch_num_start >= self.n_batches:
                             return
+<<<<<<< HEAD
                 self.epoch_num += 1
+=======
+                if not got_data_on_epoch:
+                    raise AssertionError(
+                        f"Data loader returned no data after "
+                        f"{batch_num} batches, during epoch "
+                        f"{epoch_num} -- did it reset correctly?"
+                    )
+                epoch_num += 1
+>>>>>>> c9b21b895c9328df77c822aa654d1a24bec70af9
                 if self.on_epoch_end is not None:
                     self.on_epoch_end()
 

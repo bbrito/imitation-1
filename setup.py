@@ -57,9 +57,13 @@ setup(
         "torch>=1.4.0",
         "tqdm",
         "scikit-learn>=0.21.2",
+<<<<<<< HEAD
         "stable-baselines3", #~=0.10.0
         "jax~=0.2.8",
         "jaxlib~=0.1.59",
+=======
+        "stable-baselines3~=0.10.0",
+>>>>>>> c9b21b895c9328df77c822aa654d1a24bec70af9
         "sacred~=0.8.1",
         "tensorboard>=1.14",
     ],
@@ -76,6 +80,10 @@ setup(
             # for convenience
             *TESTS_REQUIRE,
             *DOCS_REQUIRE,
+        ],
+        "jax": [
+            "jax~=0.2.8",
+            "jaxlib~=0.1.59",
         ],
         "test": TESTS_REQUIRE,
         "docs": DOCS_REQUIRE,

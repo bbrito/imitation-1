@@ -35,11 +35,14 @@ class AdversarialTrainer:
     If `debug_use_ground_truth=True` was passed into the initializer then
     `self.venv_train` is the same as `self.venv`."""
 
+    discrim_net: discrim_nets.DiscrimNet
+    """The discriminator network."""
+
     def __init__(
         self,
         venv: vec_env.VecEnv,
         gen_algo: on_policy_algorithm.OnPolicyAlgorithm,
-        discrim: discrim_nets.DiscrimNet,
+        discrim_net: discrim_nets.DiscrimNet,
         expert_data: Union[Iterable[Mapping], types.Transitions],
         expert_batch_size: int,
         n_disc_updates_per_round: int = 1,
@@ -61,7 +64,7 @@ class AdversarialTrainer:
             gen_algo: The generator RL algorithm that is trained to maximize
                 discriminator confusion. The generator batch size
                 `self.gen_batch_size` is inferred from `gen_algo.n_steps`.
-            discrim: The discriminator network. This will be moved to the same
+            discrim_net: The discriminator network. This will be moved to the same
                 device as `gen_algo`.
             expert_data: Either a `torch.utils.data.DataLoader`-like object or an
                 instance of `Transitions` which is automatically converted into a
@@ -139,13 +142,13 @@ class AdversarialTrainer:
         self._log_dir = log_dir
 
         # Create graph for optimising/recording stats on discriminator
-        self.discrim = discrim.to(self.gen_algo.device)
+        self.discrim_net = discrim_net.to(self.gen_algo.device)
         self._disc_opt_cls = disc_opt_cls
         self._disc_opt_kwargs = disc_opt_kwargs or {}
         self._init_tensorboard = init_tensorboard
         self._init_tensorboard_graph = init_tensorboard_graph
         self._disc_opt = self._disc_opt_cls(
-            self.discrim.parameters(), **self._disc_opt_kwargs
+            self.discrim_net.parameters(), **self._disc_opt_kwargs
         )
 
         if self._init_tensorboard:
@@ -167,7 +170,7 @@ class AdversarialTrainer:
             self.gen_callback = None
         else:
             self.venv_wrapped = reward_wrapper.RewardVecEnvWrapper(
-                self.venv_norm_obs, self.discrim.predict_reward_train
+                self.venv_norm_obs, self.discrim_net.predict_reward_train
             )
             self.gen_callback = self.venv_wrapped.make_log_callback()
         self.venv_train = vec_env.VecNormalize(
@@ -222,14 +225,14 @@ class AdversarialTrainer:
             batch = self._make_disc_train_batch(
                 gen_samples=gen_samples, expert_samples=expert_samples
             )
-            disc_logits = self.discrim.logits_gen_is_high(
+            disc_logits = self.discrim_net.logits_gen_is_high(
                 batch["state"],
                 batch["action"],
                 batch["next_state"],
                 batch["done"],
                 batch["log_policy_act_prob"],
             )
-            loss = self.discrim.disc_loss(disc_logits, batch["labels_gen_is_one"])
+            loss = self.discrim_net.disc_loss(disc_logits, batch["labels_gen_is_one"])
 
             # do gradient step
             self._disc_opt.zero_grad()
@@ -240,7 +243,9 @@ class AdversarialTrainer:
             # compute/write stats and TensorBoard data
             with th.no_grad():
                 train_stats = rew_common.compute_train_stats(
-                    disc_logits, batch["labels_gen_is_one"], loss
+                    disc_logits,
+                    batch["labels_gen_is_one"],
+                    loss,
                 )
             logger.record("global_step", self._global_step)
             for k, v in train_stats.items():
@@ -290,7 +295,8 @@ class AdversarialTrainer:
                 actions_tensor = th.as_tensor(expert_samples['acts']).to(self.gen_algo.device)
                 actions, values, log_prob = self.gen_algo.policy.forward(obs_tensor,deterministic=True)
 
-            np_actions = actions.detach().numpy()
+            #np_actions = actions.detach().numpy()
+            np_actions = actions.detach().cpu().numpy()
             np_exp_actions = expert_samples['acts'].detach().numpy()
 
             mse = np.mean(np.abs(np_actions-np_exp_actions))
@@ -350,17 +356,17 @@ class AdversarialTrainer:
 
 
     def _torchify_array(self, ndarray: np.ndarray, **kwargs) -> th.Tensor:
-        return th.as_tensor(ndarray, device=self.discrim.device(), **kwargs)
+        return th.as_tensor(ndarray, device=self.discrim_net.device(), **kwargs)
 
     def _torchify_with_space(
         self, ndarray: np.ndarray, space: gym.Space, **kwargs
     ) -> th.Tensor:
-        tensor = th.as_tensor(ndarray, device=self.discrim.device(), **kwargs)
+        tensor = th.as_tensor(ndarray, device=self.discrim_net.device(), **kwargs)
         preprocessed = preprocessing.preprocess_obs(
             tensor,
             space,
             # TODO(sam): can I remove "scale" kwarg in DiscrimNet etc.?
-            normalize_images=self.discrim.scale,
+            normalize_images=self.discrim_net.scale,
         )
         return preprocessed
 
@@ -444,10 +450,10 @@ class AdversarialTrainer:
         log_act_prob = log_act_prob.reshape((n_samples,))
 
         batch_dict = {
-            "state": self._torchify_with_space(obs, self.discrim.observation_space),
-            "action": self._torchify_with_space(acts, self.discrim.action_space),
+            "state": self._torchify_with_space(obs, self.discrim_net.observation_space),
+            "action": self._torchify_with_space(acts, self.discrim_net.action_space),
             "next_state": self._torchify_with_space(
-                next_obs, self.discrim.observation_space
+                next_obs, self.discrim_net.observation_space
             ),
             "done": self._torchify_array(dones),
             "labels_gen_is_one": self._torchify_array(labels_gen_is_one),
@@ -490,6 +496,10 @@ class GAIL(AdversarialTrainer):
 
 
 class AIRL(AdversarialTrainer):
+
+    reward_net: reward_nets.RewardNet
+    """The AIRL reward network, used by the imitation policy."""
+
     def __init__(
         self,
         venv: vec_env.VecEnv,

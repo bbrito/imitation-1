@@ -263,6 +263,16 @@ class DAggerTrainer:
             self.env.observation_space, self.env.action_space, **self.bc_kwargs
         )
 
+       # self.gail_trainer = adversarial.GAIL(
+        #game_env,
+       # expert_data=transitions,
+       # expert_batch_size=ImitationConfig.expert_batch_size,
+       # gen_algo=sb3.PPO(transitions,"MlpPolicy", game_env,learning_rate=ImitationConfig.learning_rate_init,
+       #                  clip_range = ImitationConfig.clip_range, verbose=1, n_steps=ImitationConfig.n_steps,
+       #                  alpha = ImitationConfig.alpha, decay = ImitationConfig.decay),
+   # )
+
+
     def _load_all_demos(self):
         num_demos_by_round = []
         for round_num in range(self._last_loaded_round + 1, self.round_num + 1):
