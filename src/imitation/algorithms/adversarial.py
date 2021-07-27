@@ -283,6 +283,7 @@ class AdversarialTrainer:
                 total_timesteps=total_timesteps,
                 reset_num_timesteps=False,
                 callback=self.gen_callback,
+                save_path = self.save_path,
                 **learn_kwargs,
             )
             self._global_step += 1
@@ -470,6 +471,7 @@ class GAIL(AdversarialTrainer):
         expert_data: Union[Iterable[Mapping], types.Transitions],
         expert_batch_size: int,
         gen_algo: on_policy_algorithm.OnPolicyAlgorithm,
+        save_path: str,
         *,
         # FIXME(sam) pass in discrim net directly; don't ask for kwargs indirectly
         discrim_kwargs: Optional[Mapping] = None,
@@ -493,6 +495,8 @@ class GAIL(AdversarialTrainer):
         super().__init__(
             venv, gen_algo, discrim, expert_data, expert_batch_size, **kwargs
         )
+
+        self.save_path = save_path
 
 
 class AIRL(AdversarialTrainer):
