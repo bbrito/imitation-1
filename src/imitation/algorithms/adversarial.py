@@ -303,7 +303,7 @@ class AdversarialTrainer:
 
             mse = np.mean(np.abs(np_actions-np_exp_actions))
 
-            logger.record("mean/gen/mse", mse)
+            #logger.record("mean/gen/mse", mse)
 
         gen_samples = self.venv_buffering.pop_transitions()
         self._gen_replay_buffer.store(gen_samples)
@@ -354,6 +354,8 @@ class AdversarialTrainer:
             logger.record("comparable_measures/imitation_reward", np.mean(imitation_rewards))
             logger.record("comparable_measures/mean_reward_gap", np.mean(reward_gaps))
             logger.dump(r)
+            print("imitation_reward: ", np.mean(imitation_rewards))
+            print("mean_reward_gap: ", np.mean(reward_gaps))
 
 
 
