@@ -409,6 +409,7 @@ class AdversarialTrainer:
         # Guarantee that Mapping arguments are in mutable form.
         expert_samples = dict(expert_samples)
         gen_samples = dict(gen_samples)
+        #
 
         # Convert applicable Tensor values to NumPy.
         for field in dataclasses.fields(types.Transitions):

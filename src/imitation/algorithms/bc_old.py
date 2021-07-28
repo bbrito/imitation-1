@@ -332,6 +332,7 @@ class BC:
             batch_num += 1
 
             print(batch_num)
+            #print(batch_num)
 
 
     def save_policy(self, policy_path: str) -> None:
