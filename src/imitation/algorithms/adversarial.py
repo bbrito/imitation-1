@@ -284,6 +284,7 @@ class AdversarialTrainer:
                 reset_num_timesteps=False,
                 callback=self.gen_callback,
                 save_path = self.save_path,
+                global_step = self._global_step,
                 **learn_kwargs,
             )
             self._global_step += 1
@@ -350,8 +351,9 @@ class AdversarialTrainer:
                 all_rewards += this_rewards
             imitation_rewards = all_rewards
             reward_gaps = [e - i for e, i in zip(expert_rewards, imitation_rewards)]
-            #logger.record("comparable_measures/imitation_reward", np.mean(imitation_rewards))
-            #logger.record("comparable_measures/mean_reward_gap", np.mean(reward_gaps))
+            logger.record("comparable_measures/imitation_reward", np.mean(imitation_rewards))
+            logger.record("comparable_measures/mean_reward_gap", np.mean(reward_gaps))
+            logger.dump(r)
 
 
 
