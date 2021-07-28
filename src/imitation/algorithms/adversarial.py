@@ -279,6 +279,7 @@ class AdversarialTrainer:
             learn_kwargs = {}
 
         with logger.accumulate_means("gen"):
+            # Generate rollouts
             self.gen_algo.learn(
                 total_timesteps=total_timesteps,
                 reset_num_timesteps=False,
@@ -289,7 +290,7 @@ class AdversarialTrainer:
             )
             self._global_step += 1
 
-            # Get expert samples to compute MSE Imitation loss
+            # TODO: UPDATE THIS Get expert samples to compute MSE Imitation loss
             expert_samples = self._next_expert_batch()
             with th.no_grad():
                 # Compute value for the last timestep
@@ -304,7 +305,7 @@ class AdversarialTrainer:
             mse = np.mean(np.abs(np_actions-np_exp_actions))
 
             logger.record("mean/gen/mse", mse)
-
+        # TODO: THERE IS ASO A BUFFER REPLY. TRANSITONS ARE EMPTY
         gen_samples = self.venv_buffering.pop_transitions()
         self._gen_replay_buffer.store(gen_samples)
 
@@ -328,6 +329,7 @@ class AdversarialTrainer:
               single argument, the round number. Round numbers are in
               `range(total_timesteps // self.gen_batch_size)`.
         """
+        # todo: shouldn't self.gen_batch_size be 32?
         n_rounds = total_timesteps // self.gen_batch_size
         assert n_rounds >= 1, (
             "No updates (need at least "
@@ -354,9 +356,6 @@ class AdversarialTrainer:
             logger.record("comparable_measures/imitation_reward", np.mean(imitation_rewards))
             logger.record("comparable_measures/mean_reward_gap", np.mean(reward_gaps))
             logger.dump(r)
-
-
-
 
     def _torchify_array(self, ndarray: np.ndarray, **kwargs) -> th.Tensor:
         return th.as_tensor(ndarray, device=self.discrim_net.device(), **kwargs)
