@@ -78,17 +78,24 @@ class BufferingWrapper(VecEnvWrapper):
             self.ret_rms2 = copy.copy(self.ret_rms)
             self.ret2 = self.ret * self.gamma + rews
             self.ret_rms2.update(self.ret2)
-        reward = np.clip(rews / np.sqrt(self.ret_rms2.var + self.epsilon), -self.clip_reward, self.clip_reward)
-        #self.ret2[dones] = 0
+        if self.norm_reward:
+            reward = np.clip(rews / np.sqrt(self.ret_rms2.var + self.epsilon), -self.clip_reward, self.clip_reward)
+        else: reward = rews
+        self.ret2[dones] = 0
+        if self.training:
+            self.ret2 = self.ret * self.gamma + rews
+            self.ret_rms2.update(self.ret2)
+        reward = np.clip(reward / np.sqrt(self.ret_rms2.var + self.epsilon), -self.clip_reward, self.clip_reward)
 
         if dones:
              infos[0]["terminal_observation"] = np.clip((infos[0]["terminal_observation"]- self.obs_rms2.mean) / np.sqrt(self.obs_rms2.var + self.epsilon), -self.clip_obs, self.clip_obs)
         finished_trajs = self._traj_accum.add_steps_and_auto_finish(
-            acts, observation, reward, dones, infos
+           acts, observation, reward, dones, infos
         )
         self._trajectories.extend(finished_trajs)
         self.n_transitions += self.num_envs
         self.reward = reward
+        self.acts = acts
         return obs, rews, dones, infos
 
 
