@@ -3,9 +3,10 @@ from typing import List
 import gym
 import numpy as np
 from stable_baselines3.common.vec_env import VecEnv, VecEnvWrapper
+from stable_baselines3.common.running_mean_std import RunningMeanStd
 
 from imitation.data import rollout, types
-
+import copy
 
 class BufferingWrapper(VecEnvWrapper):
     """Saves transitions of underlying VecEnv.
@@ -23,24 +24,31 @@ class BufferingWrapper(VecEnvWrapper):
         super().__init__(venv)
         self.error_on_premature_reset = error_on_premature_reset
         self._trajectories = []
+        self._trajectories2 = []
         self._init_reset = False
         self._traj_accum = None
+        self._traj_accum2 = None
         self._saved_acts = None
         self.n_transitions = None
+        self.n_transitions2 = None
 
     def reset(self, **kwargs):
         if (
             self._init_reset
             and self.error_on_premature_reset
-            and self.n_transitions > 0
+            and (self.n_transitions)  > 0
         ):  # noqa: E127
             raise RuntimeError("BufferingWrapper reset() before samples were accessed")
         self._init_reset = True
         self.n_transitions = 0
+        self.n_transitions2 = 0
         obs = self.venv.reset(**kwargs)
         self._traj_accum = rollout.TrajectoryAccumulator()
+        self._traj_accum2 = rollout.TrajectoryAccumulator()
         for i, ob in enumerate(obs):
+            ob_normalized = np.clip((ob - self.obs_rms.mean) / np.sqrt(self.obs_rms.var + self.epsilon), -self.clip_obs, self.clip_obs)
             self._traj_accum.add_step({"obs": ob}, key=i)
+            self._traj_accum2.add_step({"obs": ob}, key=i)
         return obs
 
     def step_async(self, actions):
@@ -54,12 +62,35 @@ class BufferingWrapper(VecEnvWrapper):
         assert self._saved_acts is not None
         acts, self._saved_acts = self._saved_acts, None
         obs, rews, dones, infos = self.venv.step_wait()
+        self.old_reward = rews
+
+        self.obs_rms2 = copy.copy(self.obs_rms)
+        if self.training:
+            if isinstance(obs, dict) and isinstance(self.obs_rms, dict):
+                for key in self.obs_rms.keys():
+                    self.obs_rms2[key].update(obs[key])
+            else:
+                self.obs_rms2.update(obs)
+
+        observation = np.clip((obs - self.obs_rms2.mean) / np.sqrt(self.obs_rms2.var + self.epsilon), -self.clip_obs, self.clip_obs)
+        #self._update_reward(rews)
+        if self.training:
+            self.ret_rms2 = copy.copy(self.ret_rms)
+            self.ret2 = self.ret * self.gamma + rews
+            self.ret_rms2.update(self.ret2)
+        reward = np.clip(rews / np.sqrt(self.ret_rms2.var + self.epsilon), -self.clip_reward, self.clip_reward)
+        #self.ret2[dones] = 0
+
+        if dones:
+             infos[0]["terminal_observation"] = np.clip((infos[0]["terminal_observation"]- self.obs_rms2.mean) / np.sqrt(self.obs_rms2.var + self.epsilon), -self.clip_obs, self.clip_obs)
         finished_trajs = self._traj_accum.add_steps_and_auto_finish(
-            acts, obs, rews, dones, infos
+            acts, observation, reward, dones, infos
         )
         self._trajectories.extend(finished_trajs)
         self.n_transitions += self.num_envs
+        self.reward = reward
         return obs, rews, dones, infos
+
 
     def _finish_partial_trajectories(self) -> List[types.TrajectoryWithRew]:
         """Finishes and returns partial trajectories in `self._traj_accum`."""

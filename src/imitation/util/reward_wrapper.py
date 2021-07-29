@@ -71,7 +71,7 @@ class RewardVecEnvWrapper(vec_env.VecEnvWrapper):
         return self.venv.step_async(actions)
 
     def step_wait(self):
-        obs, old_rews, dones, infos = self.venv.step_wait()
+        obs, old_rews, dones, infos= self.venv.step_wait()
 
         # The vecenvs automatically reset the underlying environments once they
         # encounter a `done`, in which case the last observation corresponding to
