@@ -203,6 +203,15 @@ class BC:
         self.policy_kwargs.update(policy_kwargs or {})
         self.device = utils.get_device(device)
 
+        self.policy = self.policy_class(
+            self.observation_space,
+            self.action_space,
+            ConstantLRSchedule(),
+            use_sde=self.use_sde,
+            net_arch=ImitationConfig.net_arch,
+            **self.policy_kwargs  # pytype:disable=not-instantiable
+        )
+
         self.policy = self.policy_class(**self.policy_kwargs).to(
             self.device
         )  # pytype: disable=not-instantiable

@@ -9,7 +9,7 @@ import abc
 import dataclasses
 import logging
 import os
-from typing import Callable, Tuple, Union
+from typing import Callable, Tuple, Union, Type
 
 import gym
 import numpy as np
@@ -20,7 +20,9 @@ from torch.utils import data as th_data
 from imitation.algorithms import bc_old
 from imitation.data import rollout, types
 from imitation.util import util
+from stable_baselines3.common import logger, policies, utils
 
+from imitation.policies import base
 
 class BetaSchedule(abc.ABC):
     """
@@ -162,6 +164,8 @@ class InteractiveTrajectoryCollector(gym.Wrapper):
         else:
             actual_act = user_action
 
+        print(self.beta)
+
         # actually step the env & record data as appropriate
         next_obs, reward, done, info = self.env.step(actual_act)
         self._last_obs = next_obs
@@ -228,6 +232,7 @@ class DAggerTrainer:
         scratch_dir: str,
         beta_schedule: Callable[[int], float] = None,
         batch_size: int = 32,
+        policy_class: Type[policies.BasePolicy] = base.FeedForward32Policy,
         **bc_kwargs,
     ):
         """Trainer constructor.
@@ -259,19 +264,11 @@ class DAggerTrainer:
         self._last_loaded_round = -1
         self._all_demos = []
 
+        bc_kwargs["policy_class"] = policy_class
+
         self.bc_trainer = bc_old.BC(
             self.env.observation_space, self.env.action_space, **self.bc_kwargs
         )
-
-       # self.gail_trainer = adversarial.GAIL(
-        #game_env,
-       # expert_data=transitions,
-       # expert_batch_size=ImitationConfig.expert_batch_size,
-       # gen_algo=sb3.PPO(transitions,"MlpPolicy", game_env,learning_rate=ImitationConfig.learning_rate_init,
-       #                  clip_range = ImitationConfig.clip_range, verbose=1, n_steps=ImitationConfig.n_steps,
-       #                  alpha = ImitationConfig.alpha, decay = ImitationConfig.decay),
-   # )
-
 
     def _load_all_demos(self):
         num_demos_by_round = []

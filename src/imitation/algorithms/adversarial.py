@@ -16,7 +16,36 @@ from imitation.data import buffer, types, wrappers
 from imitation.rewards import common as rew_common
 from imitation.rewards import discrim_nets, reward_nets
 from imitation.util import logger, reward_wrapper, util
+from imitation.algorithms import dagger_old
 
+import imitating_games as ig
+from config import ImitationConfig
+from os import path
+from pathlib import Path
+
+def evaluate_policy(policy, env, seeds, log_dir=None, basename=None):
+    """
+    Evaluates the `policy` on a given `env` for a set of `seeds` and returns a list of rewards of all
+    rollouts. If `log_dir` and `basename` are given then a visualization of the rollout (as VegaLite
+    html) will be stored to the `log_dir`.
+    """
+    all_rewards = []
+
+    for seed in seeds:
+        env.seed(seed)
+        this_rewards, _ = evaluation_old.evaluate_policy(
+            policy, env, return_episode_rewards=True, n_eval_episodes=2
+        )
+        if log_dir is not None and basename is not None:
+            rollout_path = path.join(log_dir, "eval")
+            Path(rollout_path).mkdir(parents=True, exist_ok=True)
+            viz = env.render()
+            viz.properties(width=500, height=500).save(
+                path.join(rollout_path, f"{basename}-{seed}.html")
+            )
+        all_rewards += this_rewards
+
+    return all_rewards
 
 class AdversarialTrainer:
     """Base class for adversarial imitation learning algorithms like GAIL and AIRL."""
@@ -338,8 +367,8 @@ class AdversarialTrainer:
         )
         for r in tqdm.tqdm(range(0, n_rounds), desc="round"):
             self.train_gen(self.gen_batch_size)
-            for _ in range(self.n_disc_updates_per_round):
-                self.train_disc()
+            #for _ in range(self.n_disc_updates_per_round):
+            #    self.train_disc()
             if callback:
                 callback(r)
             logger.dump(self._global_step)
@@ -348,7 +377,7 @@ class AdversarialTrainer:
             for seed in eval_seeds:
                 env.seed(seed)
                 this_rewards, _ = evaluation_old.evaluate_policy(
-                    self.gen_algo, env, return_episode_rewards=True, n_eval_episodes=2
+                    self.gen_algo, env.envs[0].env, return_episode_rewards=True, n_eval_episodes=2
                 )
                 all_rewards += this_rewards
             imitation_rewards = all_rewards
@@ -504,6 +533,112 @@ class GAIL(AdversarialTrainer):
         )
 
         self.save_path = save_path
+
+class BCGAIL(AdversarialTrainer):
+    def __init__(
+        self,
+        venv: vec_env.VecEnv,
+        expert_data: Union[Iterable[Mapping], types.Transitions],
+        expert_batch_size: int,
+        gen_algo: on_policy_algorithm.OnPolicyAlgorithm,
+        save_path: str,
+        *,
+        # FIXME(sam) pass in discrim net directly; don't ask for kwargs indirectly
+        discrim_kwargs: Optional[Mapping] = None,
+        **kwargs,
+    ):
+        """Generative Adversarial Imitation Learning.
+
+        Most parameters are described in and passed to `AdversarialTrainer.__init__`.
+        Additional parameters that `GAIL` adds on top of its superclass initializer are
+        as follows:
+
+        Args:
+            discrim_kwargs: Optional keyword arguments to use while constructing the
+                DiscrimNetGAIL.
+
+        """
+        discrim_kwargs = discrim_kwargs or {}
+        discrim = discrim_nets.DiscrimNetGAIL(
+            venv.observation_space, venv.action_space, **discrim_kwargs
+        )
+        super().__init__(
+            venv, gen_algo, discrim, expert_data, expert_batch_size, **kwargs
+        )
+
+        self.save_path = save_path
+
+        self.game_env = venv.envs[0].env
+
+        self.env = venv.envs[0].env
+
+        self.expert_policy = ig.GameSolverExpertPolicy(self.game_env)
+
+        self.dagger_trainer = dagger_old.DAggerTrainer(self.game_env, save_path,policy_class=gen_algo.policy)
+
+        self.dagger_trainer.bc_trainer.policy = self.gen_algo.policy
+
+    def train(
+        self,
+        total_timesteps: int,
+        callback: Optional[Callable[[int], None]] = None,
+        expert_rewards= None, env = None, eval_seeds = None) -> None:
+        """Alternates between training the generator and discriminator.
+
+        Every "round" consists of a call to `train_gen(self.gen_batch_size)`,
+        a call to `train_disc`, and finally a call to `callback(round)`.
+
+        Training ends once an additional "round" would cause the number of transitions
+        sampled from the environment to exceed `total_timesteps`.
+
+        Args:
+          total_timesteps: An upper bound on the number of transitions to sample
+              from the environment during training.
+          callback: A function called at the end of every round which takes in a
+              single argument, the round number. Round numbers are in
+              `range(total_timesteps // self.gen_batch_size)`.
+        """
+        # todo: shouldn't self.gen_batch_size be 32?
+        n_rounds = total_timesteps // self.gen_batch_size
+        assert n_rounds >= 1, (
+            "No updates (need at least "
+            f"{self.gen_batch_size} timesteps, have only "
+            f"total_timesteps={total_timesteps})!"
+        )
+
+        for r in tqdm.tqdm(range(0, n_rounds), desc="round"):
+            # Dagger training
+            self.collector = self.dagger_trainer.get_trajectory_collector()
+
+            for _ in range(ImitationConfig.n_rollouts_per_round):
+                obs = self.collector.reset()
+                done = False
+                while not done:
+                    (expert_action,), _ = self.expert_policy.predict(
+                        obs[None],
+                        deterministic=True,
+                    )
+                    obs, _, done, _ = self.collector.step(expert_action)
+
+            self.dagger_trainer.extend_and_update(n_epochs=ImitationConfig.n_training_epochs_per_round)
+
+            # RL Training
+            #self.train_gen(self.gen_batch_size)
+            #for _ in range(self.n_disc_updates_per_round):
+            #    self.train_disc()
+            if callback:
+                callback(r)
+            logger.dump(self._global_step)
+
+            # add Lasses evaluation
+            imitation_rewards = evaluate_policy(self.gen_algo.policy, self.game_env, eval_seeds)
+
+            reward_gaps = [e - i for e, i in zip(expert_rewards, imitation_rewards)]
+            logger.record("comparable_measures/imitation_reward", np.mean(imitation_rewards))
+            logger.record("comparable_measures/mean_reward_gap", np.mean(reward_gaps))
+            logger.dump(r)
+            print("imitation_reward: ", np.mean(imitation_rewards))
+            print("mean_reward_gap: ", np.mean(reward_gaps))
 
 
 class AIRL(AdversarialTrainer):
