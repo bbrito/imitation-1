@@ -574,7 +574,7 @@ class BCGAIL(AdversarialTrainer):
 
         self.expert_policy = ig.GameSolverExpertPolicy(self.game_env)
 
-        self.dagger_trainer = dagger_old.DAggerTrainer(self.game_env, save_path,policy_class=gen_algo.policy)
+        self.dagger_trainer = dagger_old.DAggerTrainer(self.game_env, save_path,policy=gen_algo.policy)
 
         self.dagger_trainer.bc_trainer.policy = self.gen_algo.policy
 
@@ -623,15 +623,33 @@ class BCGAIL(AdversarialTrainer):
             self.dagger_trainer.extend_and_update(n_epochs=ImitationConfig.n_training_epochs_per_round)
 
             # RL Training
-            #self.train_gen(self.gen_batch_size)
-            #for _ in range(self.n_disc_updates_per_round):
-            #    self.train_disc()
+            self.train_gen(self.gen_batch_size)
+            for _ in range(self.n_disc_updates_per_round):
+                self.train_disc()
             if callback:
                 callback(r)
             logger.dump(self._global_step)
 
             # add Lasses evaluation
             imitation_rewards = evaluate_policy(self.gen_algo.policy, self.game_env, eval_seeds)
+
+            # TODO: Get expert samples to compute MSE Imitation loss
+            """
+            expert_samples = batch #self._next_expert_batch()
+            with th.no_grad():
+                # Compute value for the last timestep
+                obs_tensor = th.as_tensor(expert_samples['obs']).to(self.device)
+                actions_tensor = th.as_tensor(expert_samples['acts']).to(self.device)
+                actions, values, log_prob = self.policy.forward(obs_tensor, deterministic=True)
+
+            # np_actions = actions.detach().numpy()
+            np_actions = actions.detach().cpu().numpy()
+            np_exp_actions = expert_samples['acts'].detach().numpy()
+
+            mse = np.mean(np.abs(np_actions - np_exp_actions))
+
+            logger.record("train/mse_last_batch", mse)
+            """
 
             reward_gaps = [e - i for e, i in zip(expert_rewards, imitation_rewards)]
             logger.record("comparable_measures/imitation_reward", np.mean(imitation_rewards))

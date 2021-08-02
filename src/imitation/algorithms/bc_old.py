@@ -160,7 +160,7 @@ class BC:
         observation_space: gym.Space,
         action_space: gym.Space,
         *,
-        policy_class: Type[policies.BasePolicy] = base.FeedForward32Policy,
+        policy: Type[policies.BasePolicy] = base.FeedForward32Policy,
         policy_kwargs: Optional[Mapping[str, Any]] = None,
         expert_data: Union[Iterable[Mapping], types.TransitionsMinimal, None] = None,
         optimizer_cls: Type[th.optim.Optimizer] = th.optim.Adam,
@@ -176,7 +176,7 @@ class BC:
         Args:
             observation_space: the observation space of the environment.
             action_space: the action space of the environment.
-            policy_class: used to instantiate imitation policy.
+            policy: used to instantiate imitation policy.
             policy_kwargs: keyword arguments passed to policy's constructor.
             expert_data: If not None, then immediately call
                   `self.set_expert_data_loader(expert_data)` during initialization.
@@ -193,7 +193,7 @@ class BC:
 
         self.action_space = action_space
         self.observation_space = observation_space
-        self.policy_class = policy_class
+        self.policy = policy
         self.device = device = utils.get_device(device)
         self.policy_kwargs = dict(
             observation_space=self.observation_space,
@@ -203,18 +203,22 @@ class BC:
         self.policy_kwargs.update(policy_kwargs or {})
         self.device = utils.get_device(device)
 
+        """
+        self.policy_kwargs = {}
+
+        
         self.policy = self.policy_class(
             self.observation_space,
             self.action_space,
             ConstantLRSchedule(),
-            use_sde=self.use_sde,
-            net_arch=ImitationConfig.net_arch,
+            net_arch=[32, 32],
             **self.policy_kwargs  # pytype:disable=not-instantiable
         )
-
+        
         self.policy = self.policy_class(**self.policy_kwargs).to(
             self.device
         )  # pytype: disable=not-instantiable
+        """
         optimizer_kwargs = optimizer_kwargs or {}
         self.optimizer = optimizer_cls(self.policy.parameters(), **optimizer_kwargs)
 

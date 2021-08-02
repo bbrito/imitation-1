@@ -164,8 +164,6 @@ class InteractiveTrajectoryCollector(gym.Wrapper):
         else:
             actual_act = user_action
 
-        print(self.beta)
-
         # actually step the env & record data as appropriate
         next_obs, reward, done, info = self.env.step(actual_act)
         self._last_obs = next_obs
@@ -232,7 +230,7 @@ class DAggerTrainer:
         scratch_dir: str,
         beta_schedule: Callable[[int], float] = None,
         batch_size: int = 32,
-        policy_class: Type[policies.BasePolicy] = base.FeedForward32Policy,
+        policy: Type[policies.BasePolicy] = base.FeedForward32Policy,
         **bc_kwargs,
     ):
         """Trainer constructor.
@@ -264,7 +262,7 @@ class DAggerTrainer:
         self._last_loaded_round = -1
         self._all_demos = []
 
-        bc_kwargs["policy_class"] = policy_class
+        bc_kwargs["policy"] = policy
 
         self.bc_trainer = bc_old.BC(
             self.env.observation_space, self.env.action_space, **self.bc_kwargs
