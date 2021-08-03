@@ -1,7 +1,7 @@
 import dataclasses
 import logging
 import os
-from typing import Callable, Dict, Iterable, Mapping, Optional, Type, Union
+from typing import Callable, Dict, Iterable, Mapping, Optional, Type, Union, Tuple, List
 
 import gym
 import numpy as np
@@ -11,12 +11,14 @@ import torch.utils.tensorboard as thboard
 import tqdm
 from stable_baselines3.common import on_policy_algorithm, preprocessing, vec_env
 from stable_baselines3.common import utils, evaluation_old
+from stable_baselines3.ppo import ppo
 
 from imitation.data import buffer, types, wrappers
 from imitation.rewards import common as rew_common
 from imitation.rewards import discrim_nets, reward_nets
 from imitation.util import logger, reward_wrapper, util
 from imitation.algorithms import dagger_old
+from stable_baselines3.common.vec_env import VecEnv
 
 import imitating_games as ig
 from config import ImitationConfig
@@ -46,6 +48,60 @@ def evaluate_policy(policy, env, seeds, log_dir=None, basename=None):
         all_rewards += this_rewards
 
     return all_rewards
+
+def rollout_actions(
+    model: "base_class.BaseAlgorithm",
+    env: Union[gym.Env, VecEnv],
+    n_eval_episodes: int = 10,
+    deterministic: bool = True,
+    render: bool = False,
+    callback: Optional[Callable] = None,
+    reward_threshold: Optional[float] = None,
+    return_episode_rewards: bool = False,
+) -> Union[Tuple[float, float], Tuple[List[float], List[int]]]:
+    """
+    Runs policy for ``n_eval_episodes`` episodes and returns average reward.
+    This is made to work only with one env.
+
+    :param model: The RL agent you want to evaluate.
+    :param env: The gym environment. In the case of a ``VecEnv``
+        this must contain only one environment.
+    :param n_eval_episodes: Number of episode to evaluate the agent
+    :param deterministic: Whether to use deterministic or stochastic actions
+    :param render: Whether to render the environment or not
+    :param callback: callback function to do additional checks,
+        called after each step.
+    :param reward_threshold: Minimum expected reward per episode,
+        this will raise an error if the performance is not met
+    :param return_episode_rewards: If True, a list of reward per episode
+        will be returned instead of the mean.
+    :return: Mean reward per episode, std of reward per episode
+        returns ([float], [int]) when ``return_episode_rewards`` is True
+    """
+    if isinstance(env, VecEnv):
+        assert env.num_envs == 1, "You must pass only one environment when using this function"
+
+    episode_actions, episode_lengths = [], []
+    for i in range(n_eval_episodes):
+        # Avoid double reset, as VecEnv are reset automatically
+        if not isinstance(env, VecEnv) or i == 0:
+            obs = env.reset()
+        done, state = False, None
+        episode_action = []
+        episode_length = 0
+        while not done:
+            action, state = model.predict(obs, state=state, deterministic=deterministic)
+            obs, reward, done, _info = env.step(action)
+            episode_action.append(action)
+            if callback is not None:
+                callback(locals(), globals())
+            episode_length += 1
+            if render:
+                env.render()
+        episode_actions.append(episode_action)
+        episode_lengths.append(episode_length)
+
+    return episode_actions
 
 class AdversarialTrainer:
     """Base class for adversarial imitation learning algorithms like GAIL and AIRL."""
@@ -310,6 +366,7 @@ class AdversarialTrainer:
         with logger.accumulate_means("gen"):
             # Generate rollouts
             self.gen_algo.logger = logger
+            #self.gen_algo.logger  = logging.getLogger
             self.gen_algo.learn(
                 total_timesteps=total_timesteps,
                 reset_num_timesteps=False,
@@ -319,6 +376,30 @@ class AdversarialTrainer:
                 **learn_kwargs,
             )
             self._global_step += 1
+
+            mse = []
+            eval_seeds = range(5)
+            for seed in eval_seeds:
+                self.env.seed(seed)
+                n_eval_episodes = 2
+                action_rollout_imitation = rollout_actions(
+                    self.gen_algo, self.env, return_episode_rewards=True, n_eval_episodes=n_eval_episodes
+                )
+                self.env.seed(seed)
+                action_rollout_expert = rollout_actions(
+                    self.expert_policy, self.env, return_episode_rewards=True, n_eval_episodes=n_eval_episodes
+                )
+
+                np_actions = np.array([[0]*2]*1)
+                np_exp_actions = np.array([[0]*2]*1)
+
+                for ev in range(0,n_eval_episodes):
+                    np_actions = np.concatenate((np_actions, np.array(action_rollout_imitation[ev])), axis=0)
+                    np_exp_actions = np.concatenate((np_exp_actions, np.array(action_rollout_expert[ev])), axis=0)
+                    mse.append(np.mean(np.abs(np_actions[1:,:] - np_exp_actions[1:,:])))
+
+                mse_all_seeds = np.mean(mse)
+            logger.record("mean/gen/mse_over_10_rollouts", mse_all_seeds)
 
             # TODO: UPDATE THIS Get expert samples to compute MSE Imitation loss
             expert_samples = self._next_expert_batch()
@@ -372,6 +453,7 @@ class AdversarialTrainer:
             #    self.train_disc()
             if callback:
                 callback(r)
+
             logger.dump(self._global_step)
             # add Lasses evaluation
             all_rewards = []
@@ -627,7 +709,9 @@ class BCGAIL(AdversarialTrainer):
                 self.train_disc()
             if callback:
                 callback(r)
+            #logger = self.gen_algo.logger
             logger.dump(self._global_step)
+
 
             # add Lasses evaluation
             imitation_rewards = evaluate_policy(self.gen_algo.policy, self.game_env, eval_seeds)
