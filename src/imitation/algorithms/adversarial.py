@@ -10,7 +10,7 @@ import torch.utils.data as th_data
 import torch.utils.tensorboard as thboard
 import tqdm
 from stable_baselines3.common import on_policy_algorithm, preprocessing, vec_env
-from stable_baselines3.common import utils, evaluation_old, logger_old
+from stable_baselines3.common import utils, evaluation_old
 
 from imitation.data import buffer, types, wrappers
 from imitation.rewards import common as rew_common
@@ -309,12 +309,13 @@ class AdversarialTrainer:
 
         with logger.accumulate_means("gen"):
             # Generate rollouts
+            self.gen_algo.logger = logger
             self.gen_algo.learn(
                 total_timesteps=total_timesteps,
                 reset_num_timesteps=False,
                 callback=self.gen_callback,
-                save_path = self.save_path,
-                global_step = self._global_step,
+                #save_path = self.save_path,
+                #global_step = self._global_step,
                 **learn_kwargs,
             )
             self._global_step += 1
@@ -574,9 +575,7 @@ class BCGAIL(AdversarialTrainer):
 
         self.expert_policy = ig.GameSolverExpertPolicy(self.game_env)
 
-        self.dagger_trainer = dagger_old.DAggerTrainer(self.game_env, save_path,policy=gen_algo.policy)
-
-        self.dagger_trainer.bc_trainer.policy = self.gen_algo.policy
+        self.dagger_trainer = dagger_old.DAggerTrainer(self.game_env, save_path, policy=gen_algo.policy)
 
     def train(
         self,
