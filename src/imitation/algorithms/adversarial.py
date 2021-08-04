@@ -21,7 +21,6 @@ from imitation.algorithms import dagger_old
 from stable_baselines3.common.vec_env import VecEnv
 
 import imitating_games as ig
-from config import ImitationConfig
 from os import path
 from pathlib import Path
 
@@ -197,6 +196,7 @@ class AdversarialTrainer:
         self._global_step = 0
         self._disc_step = 0
         self.n_disc_updates_per_round = n_disc_updates_per_round
+        self.logger = logger
 
         if expert_batch_size <= 0:
             raise ValueError(f"expert_batch_size={expert_batch_size} must be positive.")
@@ -365,7 +365,7 @@ class AdversarialTrainer:
 
         with logger.accumulate_means("gen"):
             # Generate rollouts
-            self.gen_algo.logger = logger
+            self.gen_algo.logger = self.logger
             #self.gen_algo.logger  = logging.getLogger
             self.gen_algo.learn(
                 total_timesteps=total_timesteps,
@@ -377,45 +377,7 @@ class AdversarialTrainer:
             )
             self._global_step += 1
 
-            mse = []
-            eval_seeds = range(5)
-            for seed in eval_seeds:
-                self.env.seed(seed)
-                n_eval_episodes = 2
-                action_rollout_imitation = rollout_actions(
-                    self.gen_algo, self.env, return_episode_rewards=True, n_eval_episodes=n_eval_episodes
-                )
-                self.env.seed(seed)
-                action_rollout_expert = rollout_actions(
-                    self.expert_policy, self.env, return_episode_rewards=True, n_eval_episodes=n_eval_episodes
-                )
 
-                np_actions = np.array([[0]*2]*1)
-                np_exp_actions = np.array([[0]*2]*1)
-
-                for ev in range(0,n_eval_episodes):
-                    np_actions = np.concatenate((np_actions, np.array(action_rollout_imitation[ev])), axis=0)
-                    np_exp_actions = np.concatenate((np_exp_actions, np.array(action_rollout_expert[ev])), axis=0)
-                    mse.append(np.mean(np.abs(np_actions[1:,:] - np_exp_actions[1:,:])))
-
-                mse_all_seeds = np.mean(mse)
-            logger.record("mean/gen/mse_over_10_rollouts", mse_all_seeds)
-
-            # TODO: UPDATE THIS Get expert samples to compute MSE Imitation loss
-            expert_samples = self._next_expert_batch()
-            with th.no_grad():
-                # Compute value for the last timestep
-                obs_tensor = th.as_tensor(expert_samples['obs']).to(self.gen_algo.device)
-                actions_tensor = th.as_tensor(expert_samples['acts']).to(self.gen_algo.device)
-                actions, values, log_prob = self.gen_algo.policy.forward(obs_tensor,deterministic=True)
-
-            #np_actions = actions.detach().numpy()
-            np_actions = actions.detach().cpu().numpy()
-            np_exp_actions = expert_samples['acts'].detach().numpy()
-
-            mse = np.mean(np.abs(np_actions-np_exp_actions))
-
-            #logger.record("mean/gen/mse", mse)
         # TODO: THERE IS ASO A BUFFER REPLY. TRANSITONS ARE EMPTY
         gen_samples = self.venv_buffering.pop_transitions()
         self._gen_replay_buffer.store(gen_samples)
@@ -624,6 +586,12 @@ class BCGAIL(AdversarialTrainer):
         expert_data: Union[Iterable[Mapping], types.Transitions],
         expert_batch_size: int,
         gen_algo: on_policy_algorithm.OnPolicyAlgorithm,
+        dagger: bool,
+        n_warm_start_rounds: int,
+        n_rollouts_per_round: int,
+        n_training_epochs_per_round: int,
+        n_disc_updates_per_round: int,
+        eval_seeds,
         save_path: str,
         *,
         # FIXME(sam) pass in discrim net directly; don't ask for kwargs indirectly
@@ -646,8 +614,17 @@ class BCGAIL(AdversarialTrainer):
             venv.observation_space, venv.action_space, **discrim_kwargs
         )
         super().__init__(
-            venv, gen_algo, discrim, expert_data, expert_batch_size, **kwargs
+            venv, gen_algo, discrim, expert_data, expert_batch_size, n_disc_updates_per_round, **kwargs
         )
+        #assert (
+        #    logger.is_configured()
+        #), "Requires call to imitation.util.logger.configure"
+
+        self.n_rollouts_per_round = n_rollouts_per_round
+        self.n_training_epochs_per_round = n_training_epochs_per_round
+        self.eval_seeds = eval_seeds
+        self.dagger = dagger
+        self.n_warm_start_rounds = n_warm_start_rounds
 
         self.save_path = save_path
 
@@ -663,7 +640,7 @@ class BCGAIL(AdversarialTrainer):
         self,
         total_timesteps: int,
         callback: Optional[Callable[[int], None]] = None,
-        expert_rewards= None, env = None, eval_seeds = None) -> None:
+        env = None) -> None:
         """Alternates between training the generator and discriminator.
 
         Every "round" consists of a call to `train_gen(self.gen_batch_size)`,
@@ -681,65 +658,117 @@ class BCGAIL(AdversarialTrainer):
         """
         # todo: shouldn't self.gen_batch_size be 32?
         n_rounds = total_timesteps // self.gen_batch_size
+
         assert n_rounds >= 1, (
             "No updates (need at least "
             f"{self.gen_batch_size} timesteps, have only "
             f"total_timesteps={total_timesteps})!"
         )
 
-        for r in tqdm.tqdm(range(0, n_rounds), desc="round"):
+
+        if self.dagger:
+            # warm start with dagger
             # Dagger training
-            self.collector = self.dagger_trainer.get_trajectory_collector()
+            for r in tqdm.tqdm(range(0, self.n_warm_start_rounds), desc="round"):
+                self.collector = self.dagger_trainer.get_trajectory_collector()
 
-            for _ in range(ImitationConfig.n_rollouts_per_round):
-                obs = self.collector.reset()
-                done = False
-                while not done:
-                    (expert_action,), _ = self.expert_policy.predict(
-                        obs[None],
-                        deterministic=True,
+                for _ in range(self.n_rollouts_per_round):
+                    obs = self.collector.reset()
+                    done = False
+                    while not done:
+                        (expert_action,), _ = self.expert_policy.predict(
+                            obs[None],
+                            deterministic=True,
+                        )
+                        obs, _, done, _ = self.collector.step(expert_action)
+
+                self.dagger_trainer.extend_and_update(n_epochs=self.n_training_epochs_per_round)
+
+                expert_rewards = evaluate_policy(self.expert_policy, self.game_env, self.eval_seeds)
+                imitation_rewards = evaluate_policy(self.gen_algo.policy, self.game_env, self.eval_seeds)
+                reward_gaps = [e - i for e, i in zip(expert_rewards, imitation_rewards)]
+
+                logger = self.logger
+                logger.record("comparable_measures/imitation_reward", np.mean(imitation_rewards))
+                logger.record("comparable_measures/mean_reward_gap", np.mean(reward_gaps))
+
+                # Get expert samples to compute MSE Imitation loss
+                mse = []
+                for seed in self.eval_seeds:
+                    self.env.seed(seed)
+                    n_eval_episodes = 2
+                    action_rollout_imitation = rollout_actions(
+                        self.gen_algo, self.env, return_episode_rewards=True, n_eval_episodes=n_eval_episodes
                     )
-                    obs, _, done, _ = self.collector.step(expert_action)
+                    self.env.seed(seed)
+                    action_rollout_expert = rollout_actions(
+                        self.expert_policy, self.env, return_episode_rewards=True, n_eval_episodes=n_eval_episodes
+                    )
 
-            self.dagger_trainer.extend_and_update(n_epochs=ImitationConfig.n_training_epochs_per_round)
+                    np_actions = np.array([[0] * 2] * 1)
+                    np_exp_actions = np.array([[0] * 2] * 1)
+
+                    for ev in range(0, n_eval_episodes):
+                        np_actions = np.concatenate((np_actions, np.array(action_rollout_imitation[ev])), axis=0)
+                        np_exp_actions = np.concatenate((np_exp_actions, np.array(action_rollout_expert[ev])), axis=0)
+                        mse.append(np.mean(np.abs(np_actions[1:, :] - np_exp_actions[1:, :])))
+
+                mse_all_seeds = np.mean(mse)
+                print("mse warmstart ", mse_all_seeds)
+
+
+                logger.record("comparable_measures/mse_over_10_rollouts", mse_all_seeds)
+
+                logger.dump(r+1)
+
+        for k in tqdm.tqdm(range(0, n_rounds), desc="round"):
+
 
             # RL Training
             self.train_gen(self.gen_batch_size)
+            self.logger = logger
             for _ in range(self.n_disc_updates_per_round):
-                self.train_disc()
+               self.train_disc()
             if callback:
-                callback(r)
-            #logger = self.gen_algo.logger
-            logger.dump(self._global_step)
+                callback(k)
+            logger = self.gen_algo.logger
+            logger.dump(r+k+2)
 
 
             # add Lasses evaluation
-            imitation_rewards = evaluate_policy(self.gen_algo.policy, self.game_env, eval_seeds)
-
-            # TODO: Get expert samples to compute MSE Imitation loss
-            """
-            expert_samples = batch #self._next_expert_batch()
-            with th.no_grad():
-                # Compute value for the last timestep
-                obs_tensor = th.as_tensor(expert_samples['obs']).to(self.device)
-                actions_tensor = th.as_tensor(expert_samples['acts']).to(self.device)
-                actions, values, log_prob = self.policy.forward(obs_tensor, deterministic=True)
-
-            # np_actions = actions.detach().numpy()
-            np_actions = actions.detach().cpu().numpy()
-            np_exp_actions = expert_samples['acts'].detach().numpy()
-
-            mse = np.mean(np.abs(np_actions - np_exp_actions))
-
-            logger.record("train/mse_last_batch", mse)
-            """
-
+            expert_rewards = evaluate_policy(self.expert_policy, self.game_env, self.eval_seeds)
+            imitation_rewards = evaluate_policy(self.gen_algo.policy, self.game_env, self.eval_seeds)
             reward_gaps = [e - i for e, i in zip(expert_rewards, imitation_rewards)]
             logger.record("comparable_measures/imitation_reward", np.mean(imitation_rewards))
             logger.record("comparable_measures/mean_reward_gap", np.mean(reward_gaps))
-            logger.dump(r)
-            print("imitation_reward: ", np.mean(imitation_rewards))
-            print("mean_reward_gap: ", np.mean(reward_gaps))
+
+            # Get expert samples to compute MSE Imitation loss
+            mse = []
+            for seed in self.eval_seeds:
+                self.env.seed(seed)
+                n_eval_episodes = 2
+                action_rollout_imitation = rollout_actions(
+                    self.gen_algo, self.env, return_episode_rewards=True, n_eval_episodes=n_eval_episodes
+                )
+                self.env.seed(seed)
+                action_rollout_expert = rollout_actions(
+                    self.expert_policy, self.env, return_episode_rewards=True, n_eval_episodes=n_eval_episodes
+                )
+
+                np_actions = np.array([[0]*2]*1)
+                np_exp_actions = np.array([[0]*2]*1)
+
+                for ev in range(0,n_eval_episodes):
+                    np_actions = np.concatenate((np_actions, np.array(action_rollout_imitation[ev])), axis=0)
+                    np_exp_actions = np.concatenate((np_exp_actions, np.array(action_rollout_expert[ev])), axis=0)
+                    mse.append(np.mean(np.abs(np_actions[1:,:] - np_exp_actions[1:,:])))
+
+            mse_all_seeds = np.mean(mse)
+            logger.record("comparable_measures/mse_over_10_rollouts", mse_all_seeds)
+
+            logger.dump(r+k+2)
+            #print("imitation_reward: ", np.mean(imitation_rewards))
+            #print("mean_reward_gap: ", np.mean(reward_gaps))
 
 
 class AIRL(AdversarialTrainer):

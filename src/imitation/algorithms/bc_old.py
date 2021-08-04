@@ -340,7 +340,7 @@ class BC:
             if batch_num % log_interval == 0:
                 for stats in [stats_dict_it, stats_dict_loss]:
                     for k, v in stats.items():
-                        logger.record(k, v)
+                        logger.record('dagger/'+ k, v)
                 logger.dump(batch_num)
             batch_num += 1
 
