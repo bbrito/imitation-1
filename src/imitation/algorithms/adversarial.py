@@ -10,7 +10,7 @@ import torch.utils.data as th_data
 import torch.utils.tensorboard as thboard
 import tqdm
 from stable_baselines3.common import on_policy_algorithm, preprocessing, vec_env
-from stable_baselines3.common import utils, evaluation_old
+from stable_baselines3.common import utils, evaluation
 from stable_baselines3.ppo import ppo
 
 from imitation.data import buffer, types, wrappers
@@ -34,7 +34,7 @@ def evaluate_policy(policy, env, seeds, log_dir=None, basename=None):
 
     for seed in seeds:
         env.seed(seed)
-        this_rewards, _ = evaluation_old.evaluate_policy(
+        this_rewards, _ = evaluation.evaluate_policy(
             policy, env, return_episode_rewards=True, n_eval_episodes=2
         )
         if log_dir is not None and basename is not None:

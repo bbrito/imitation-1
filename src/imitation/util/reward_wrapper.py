@@ -31,14 +31,11 @@ class RewardVecEnvWrapper(vec_env.VecEnvWrapper):
         self, venv: vec_env.VecEnv, reward_fn: common.RewardFn, ep_history: int = 100
     ):
         """Uses a provided reward_fn to replace the reward function returned by `step()`.
-
         Automatically resets the inner VecEnv upon initialization. A tricky part
         about this class is keeping track of the most recent observation from each
         environment.
-
         Will also include the previous reward given by the inner VecEnv in the
         returned info dict under the `wrapped_env_rew` key.
-
         Args:
             venv: The VecEnv to wrap.
             reward_fn: A function that wraps takes in vectorized transitions
@@ -71,7 +68,7 @@ class RewardVecEnvWrapper(vec_env.VecEnvWrapper):
         return self.venv.step_async(actions)
 
     def step_wait(self):
-        obs, old_rews, dones, infos= self.venv.step_wait()
+        obs, old_rews, dones, infos = self.venv.step_wait()
 
         # The vecenvs automatically reset the underlying environments once they
         # encounter a `done`, in which case the last observation corresponding to
@@ -83,7 +80,7 @@ class RewardVecEnvWrapper(vec_env.VecEnvWrapper):
 
             obs_fixed.append(single_obs)
         obs_fixed = np.stack(obs_fixed)
-        # TODO: REWARD IS CHANGED
+
         rews = self.reward_fn(self._old_obs, self._actions, obs_fixed, np.array(dones))
         assert len(rews) == len(obs), "must return one rew for each env"
         done_mask = np.asarray(dones, dtype="bool").reshape((len(dones),))

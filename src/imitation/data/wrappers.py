@@ -3,14 +3,12 @@ from typing import List
 import gym
 import numpy as np
 from stable_baselines3.common.vec_env import VecEnv, VecEnvWrapper
-from stable_baselines3.common.running_mean_std import RunningMeanStd
 
 from imitation.data import rollout, types
-import copy
+
 
 class BufferingWrapper(VecEnvWrapper):
     """Saves transitions of underlying VecEnv.
-
     Retrieve saved transitions using `pop_transitions()`.
     """
 
@@ -24,31 +22,24 @@ class BufferingWrapper(VecEnvWrapper):
         super().__init__(venv)
         self.error_on_premature_reset = error_on_premature_reset
         self._trajectories = []
-        self._trajectories2 = []
         self._init_reset = False
         self._traj_accum = None
-        self._traj_accum2 = None
         self._saved_acts = None
         self.n_transitions = None
-        self.n_transitions2 = None
 
     def reset(self, **kwargs):
         if (
             self._init_reset
             and self.error_on_premature_reset
-            and (self.n_transitions)  > 0
+            and self.n_transitions > 0
         ):  # noqa: E127
             raise RuntimeError("BufferingWrapper reset() before samples were accessed")
         self._init_reset = True
         self.n_transitions = 0
-        self.n_transitions2 = 0
         obs = self.venv.reset(**kwargs)
         self._traj_accum = rollout.TrajectoryAccumulator()
-        self._traj_accum2 = rollout.TrajectoryAccumulator()
         for i, ob in enumerate(obs):
-            ob_normalized = np.clip((ob - self.obs_rms.mean) / np.sqrt(self.obs_rms.var + self.epsilon), -self.clip_obs, self.clip_obs)
             self._traj_accum.add_step({"obs": ob}, key=i)
-            self._traj_accum2.add_step({"obs": ob}, key=i)
         return obs
 
     def step_async(self, actions):
@@ -62,15 +53,12 @@ class BufferingWrapper(VecEnvWrapper):
         assert self._saved_acts is not None
         acts, self._saved_acts = self._saved_acts, None
         obs, rews, dones, infos = self.venv.step_wait()
-
         finished_trajs = self._traj_accum.add_steps_and_auto_finish(
-          acts, obs, rews, dones, infos
+            acts, obs, rews, dones, infos
         )
         self._trajectories.extend(finished_trajs)
         self.n_transitions += self.num_envs
-        self.acts = acts
         return obs, rews, dones, infos
-
 
     def _finish_partial_trajectories(self) -> List[types.TrajectoryWithRew]:
         """Finishes and returns partial trajectories in `self._traj_accum`."""
@@ -93,7 +81,6 @@ class BufferingWrapper(VecEnvWrapper):
 
     def pop_transitions(self) -> types.TransitionsWithRew:
         """Pops recorded transitions, returning them as an instance of Transitions.
-
         Raises a RuntimeError if called when `self.n_transitions == 0`.
         """
         if self.n_transitions == 0:
@@ -112,7 +99,6 @@ class BufferingWrapper(VecEnvWrapper):
 
 class RolloutInfoWrapper(gym.Wrapper):
     """Add the entire episode's rewards and observations to `info` at episode end.
-
     Whenever done=True, `info["rollouts"]` is a dict with keys "obs" and "rews", whose
     corresponding values hold the Numpy arrays containing the raw observations and
     rewards seen during this episode.

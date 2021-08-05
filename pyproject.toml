@@ -1,2 +1,37 @@
 [tool.black]
 target-version = ["py37"]
+
+[tool.poetry]
+name = "imitation"
+version = "0.2.0"
+description = ""
+authors = ["LuziaKn <luzia.knoedler@web.de>"]
+packages =  [ {include = "imitation", from = "src"} ]
+
+[tool.poetry.dependencies]
+python = "^3.7"
+gym = {extras = ["classic_control"], version = "^0"}
+matplotlib = "^3.4.2"
+numpy = "^1.15.0"
+torch = { url = "https://download.pytorch.org/whl/cpu/torch-1.9.0%2Bcpu-cp37-cp37m-linux_x86_64.whl " }
+tqdm = "^4.61.2"
+stable-baselines3 = "~0.10.0"
+sacred = "0.8.1"
+tensorboard = "^2"
+scikit-learn = "^0.24.2"
+jax = "~0.2.8"
+
+[tool.poetry.dev-dependencies]
+pytest = "^6.2.4"
+seals = "^0.1.1"
+pytest-notebook = "^0.6.1"
+ray = {version = "~0.8.5", extras = ["debug", "tune"]}
+jaxlib = "~0.1.59"
+poethepoet = "^0.10.0"
+
+[build-system]
+requires = ["poetry-core>=1.0.0"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.poe.tasks]
+force-cuda11 = "python3 -m pip install torch==1.9.0+cu111 -f https://download.pytorch.org/whl/torch_stable.html"
