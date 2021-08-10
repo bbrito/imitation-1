@@ -672,6 +672,10 @@ class BCGAIL(AdversarialTrainer):
             # Dagger training
             print('dagger')
             for r in tqdm.tqdm(range(0, self.n_warm_start_rounds), desc="round"):
+                # TODO: RESET
+                self.collector._gen_rollout_buffer.reset()
+                self.collector._exp_rollout_buffer.reset()
+
                 self.collector = self.dagger_trainer.get_trajectory_collector(beta= None)
 
                 for _ in range(self.n_rollouts_per_round):
@@ -685,6 +689,11 @@ class BCGAIL(AdversarialTrainer):
                         obs, _, done, _ = self.collector.step(expert_action)
 
                 self.dagger_trainer.extend_and_update(n_epochs=self.n_training_epochs_per_round)
+
+                # Train discriminator
+                policy_samples = self.collector._gen_replay_buffer.sample(self.expert_batch_size)
+                expert_samples = self.collector._exp_replay_buffer.sample(self.expert_batch_size)
+                self.train_disc(expert_samples, policy_samples)
 
                 expert_rewards = evaluate_policy(self.expert_policy, self.game_env, self.eval_seeds)
                 imitation_rewards = evaluate_policy(self.gen_algo.policy, self.game_env, self.eval_seeds)
@@ -729,7 +738,6 @@ class BCGAIL(AdversarialTrainer):
 
             # RL Training
             self.train_gen(self.gen_batch_size)
-            self.logger = logger
             for _ in range(self.n_disc_updates_per_round):
                self.train_disc()
             if callback:

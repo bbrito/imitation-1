@@ -131,6 +131,8 @@ class InteractiveTrajectoryCollector(gym.Wrapper):
         self._done_before = True
         self._is_reset = False
 
+        # TODO: Creatae two buffer replay
+
     def reset(self) -> np.ndarray:
         """Resets the environment.
         Returns:
@@ -172,6 +174,10 @@ class InteractiveTrajectoryCollector(gym.Wrapper):
         self.traj_accum.add_step(
             {"acts": user_action, "obs": next_obs, "rews": reward, "infos": info}
         )
+
+        # TODO: Save data to warm-start discriminator
+        _gen_buffer.add(self._last_obs, actions, rewards, self._last_dones, values, log_probs)
+        _exp_buffer.add(self._last_obs, actions, rewards, self._last_dones, values, log_probs)
 
         # if we're finished, then save the trajectory & print a message
         if done and not self._done_before:
