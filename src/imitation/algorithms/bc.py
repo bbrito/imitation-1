@@ -15,6 +15,7 @@ from stable_baselines3.common import logger, policies, utils
 
 from imitation.data import types
 from imitation.policies import base
+from imitation.rewards import discrim_nets
 
 
 def reconstruct_policy(
@@ -161,6 +162,7 @@ class BC:
         action_space: gym.Space,
         *,
         policy: Type[policies.BasePolicy] = base.FeedForward32Policy,
+        disc_policy: Union[Type[discrim_nets.DiscrimNetGAIL],None] = None,
         policy_kwargs: Optional[Mapping[str, Any]] = None,
         expert_data: Union[Iterable[Mapping], types.TransitionsMinimal, None] = None,
         optimizer_cls: Type[th.optim.Optimizer] = th.optim.Adam,
@@ -194,6 +196,7 @@ class BC:
         self.action_space = action_space
         self.observation_space = observation_space
         self.policy = policy
+        self.disc_policy = disc_policy
         self.device = device = utils.get_device(device)
         self.policy_kwargs = dict(
             observation_space=self.observation_space,
@@ -223,8 +226,13 @@ class BC:
             self.policy = base.FeedForward32Policy(**self.policy_kwargs).to(
                 self.device)
 
-        optimizer_kwargs = optimizer_kwargs or {}
-        self.optimizer = optimizer_cls(self.policy.parameters(), **optimizer_kwargs)
+        if self.disc_policy is not None:
+            optimizer_kwargs = optimizer_kwargs or {}
+            self.optimizer = optimizer_cls(self.policy.parameters(), **optimizer_kwargs)
+            self.optimizer_disc = optimizer_cls(self.disc_policy.parameters(), **optimizer_kwargs)
+        else:
+            optimizer_kwargs = optimizer_kwargs or {}
+            self.optimizer = optimizer_cls(self.policy.parameters(), **optimizer_kwargs)
 
         self.expert_data_loader: Optional[Iterable[Mapping]] = None
         self.ent_weight = ent_weight
@@ -335,11 +343,18 @@ class BC:
 
         batch_num = 0
         for batch, stats_dict_it in it:
+            actual_act = []
+            for i in range(0,len(batch["obs"])):
+                actual_act.append(batch["infos"][i]['actual_act'])
+            actual_act = th.Tensor(actual_act)
+
             loss, stats_dict_loss = self._calculate_loss(batch["obs"], batch["acts"])
 
             self.optimizer.zero_grad()
             loss.backward()
             self.optimizer.step()
+
+            if self.disc_policy is not None:
 
             if batch_num % log_interval == 0:
                 for stats in [stats_dict_it, stats_dict_loss]:

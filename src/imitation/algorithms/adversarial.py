@@ -634,7 +634,8 @@ class BCGAIL(AdversarialTrainer):
 
         self.expert_policy = ig.GameSolverExpertPolicy(self.game_env)
 
-        self.dagger_trainer = dagger.DAggerTrainer(self.game_env, save_path, policy=gen_algo.policy)
+        self.dagger_trainer = dagger.DAggerTrainer(self.game_env, save_path, policy=gen_algo.policy, disc_policy = discrim)
+
 
     def train(
         self,
