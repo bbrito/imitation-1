@@ -20,6 +20,7 @@ from torch.utils import data as th_data
 from imitation.algorithms import bc
 from imitation.data import rollout, types
 from imitation.util import util
+from imitation.rewards import discrim_nets
 from stable_baselines3.common import logger, policies, utils
 
 from imitation.policies import base
@@ -166,6 +167,7 @@ class InteractiveTrajectoryCollector(gym.Wrapper):
 
         # actually step the env & record data as appropriate
         next_obs, reward, done, info = self.env.step(actual_act)
+        info['actual_act'] = actual_act
         self._last_obs = next_obs
         self.traj_accum.add_step(
             {"acts": user_action, "obs": next_obs, "rews": reward, "infos": info}
@@ -231,6 +233,7 @@ class DAggerTrainer:
         beta_schedule: Callable[[int], float] = None,
         batch_size: int = 32,
         policy: Union[Type[policies.BasePolicy],None] = None,#base.FeedForward32Policy,
+        disc_policy: Union[Type[discrim_nets.DiscrimNetGAIL],None] = None,
         **bc_kwargs,
     ):
         """Trainer constructor.
@@ -264,6 +267,7 @@ class DAggerTrainer:
 
 
         bc_kwargs["policy"] = policy
+        bc_kwargs["disc_policy"] = disc_policy
 
         self.bc_trainer = bc.BC(
             self.env.observation_space, self.env.action_space, **self.bc_kwargs

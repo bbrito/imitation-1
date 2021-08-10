@@ -78,7 +78,8 @@ class TrajectoryAccumulator:
         out_dict_unstacked = collections.defaultdict(list)
         for part_dict in part_dicts:
             for key, array in part_dict.items():
-                out_dict_unstacked[key].append(array)
+                if key != "used_acts":
+                    out_dict_unstacked[key].append(array)
         out_dict_stacked = {
             key: np.stack(arr_list, axis=0)
             for key, arr_list in out_dict_unstacked.items()
