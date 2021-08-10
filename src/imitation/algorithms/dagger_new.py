@@ -1,4 +1,5 @@
 """DAgger (https://arxiv.org/pdf/1011.0686.pdf).
+
 Interactively trains policy by collecting some demonstrations, doing BC, collecting more
 demonstrations, doing BC again, etc. Initially the demonstrations just come from the
 expert's policy; over time, they shift to be drawn more and more from the imitator's
@@ -9,20 +10,18 @@ import abc
 import dataclasses
 import logging
 import os
-from typing import Callable, Tuple, Union, Type
-
+from typing import Callable, Tuple, Union
+from copy import deepcopy
 import gym
 import numpy as np
 import torch as th
 from stable_baselines3.common import utils
 from torch.utils import data as th_data
 
-from imitation.algorithms import bc_old
+from imitation.algorithms import bc
 from imitation.data import rollout, types
 from imitation.util import util
-from stable_baselines3.common import logger, policies, utils
 
-from imitation.policies import base
 
 class BetaSchedule(abc.ABC):
     """
@@ -33,9 +32,11 @@ class BetaSchedule(abc.ABC):
     @abc.abstractmethod
     def __call__(self, round_num: int) -> float:
         """Gives the value of beta for the current round.
+
         Args:
             round: the current round number. Rounds are assumed to be numbered 0, 1, 2,
               etc.
+
         Returns:
             beta: the fraction of the time to sample a demonstrator action. Robot
               actions will be sampled the remainder of the time.
@@ -63,11 +64,13 @@ def reconstruct_trainer(
     scratch_dir: str, device: Union[th.device, str] = "auto"
 ) -> "DAggerTrainer":
     """Reconstruct trainer from the latest snapshot in some working directory.
+
     Args:
       scratch_dir: path to the working directory created by a previous run of
         this algorithm. The directory should contain `checkpoint-latest.pt` and
         `policy-latest.pt` files.
       device: device on which to load the trainer.
+
     Returns:
       trainer: a reconstructed `DAggerTrainer` with the same state as the
         previously-saved one.
@@ -100,6 +103,7 @@ class InteractiveTrajectoryCollector(gym.Wrapper):
     """Wrapper around the `.step()` and `.reset()` of an env that allows DAgger to
     inject a "robot" action (i.e. an action from the imitation policy) that overrides
     the action given to `.step()` when necessary.
+
     Will also automatically save trajectories.
     """
 
@@ -111,6 +115,7 @@ class InteractiveTrajectoryCollector(gym.Wrapper):
         save_dir: str,
     ):
         """Trajectory collector constructor.
+
         Args:
           env: environment to sample trajectories from.
           get_robot_act: get a single robot action that can be substituted for
@@ -132,11 +137,14 @@ class InteractiveTrajectoryCollector(gym.Wrapper):
 
     def reset(self) -> np.ndarray:
         """Resets the environment.
+
         Returns:
             obs: first observation of a new trajectory.
         """
         self.traj_accum = rollout.TrajectoryAccumulator()
         obs = self.env.reset()
+        print("reset")
+        print(obs.flags['WRITEABLE'])
         self._last_obs = obs
         self.traj_accum.add_step({"obs": obs})
         self._done_before = False
@@ -145,14 +153,17 @@ class InteractiveTrajectoryCollector(gym.Wrapper):
 
     def step(self, user_action: np.ndarray) -> Tuple[np.ndarray, float, bool, dict]:
         """Steps the environment.
+
         DAgger needs to be able to inject imitation policy actions randomly at some
         subset of time steps. This method will replace the given action with a
         "robot" (i.e. imitation policy) action if necessary.
+
         Args:
           user_action: the _intended_ demonstrator action for the current
             state. This will be executed with probability `self.beta`.
             Otherwise, a "robot" action will be sampled and executed
             instead.
+
         Returns:
           next_obs, reward, done, info: unchanged output of `self.env.step()`.
         """
@@ -164,12 +175,18 @@ class InteractiveTrajectoryCollector(gym.Wrapper):
         else:
             actual_act = user_action
 
+        act = np.array(user_action)
+        act.setflags(write=1)
         # actually step the env & record data as appropriate
         next_obs, reward, done, info = self.env.step(actual_act)
+
         self._last_obs = next_obs
         self.traj_accum.add_step(
-            {"acts": user_action, "obs": next_obs, "rews": reward, "infos": info}
+            {"acts": act, "obs": next_obs, "rews": reward, "infos": info}
         )
+        print(next_obs.flags['WRITEABLE'])
+        print(reward.flags['WRITEABLE'])
+        print(act.flags['WRITEABLE'])
 
         # if we're finished, then save the trajectory & print a message
         if done and not self._done_before:
@@ -195,6 +212,7 @@ class NeedsDemosException(Exception):
 
 class DAggerTrainer:
     """Helper class for interactively training with DAgger.
+
     In essence, this is just BC with some helpers for incrementally
     resuming training and interpolating between demonstrator/learnt policies.
     Interaction proceeds in "rounds" in which the demonstrator first provides a
@@ -202,6 +220,7 @@ class DAggerTrainer:
     fine-tune the policy on the entire set of demonstrations collected in all
     rounds so far. Demonstrations and policy/trainer checkpoints are stored in a
     directory with the following structure::
+
        scratch-dir-name/
            checkpoint-001.pkl
            checkpoint-002.pkl
@@ -230,10 +249,10 @@ class DAggerTrainer:
         scratch_dir: str,
         beta_schedule: Callable[[int], float] = None,
         batch_size: int = 32,
-        policy: Type[policies.BasePolicy] = base.FeedForward32Policy,
         **bc_kwargs,
     ):
         """Trainer constructor.
+
         Args:
             env: environment to train in.
             scratch_dir: directory to use to store intermediate training
@@ -257,14 +276,15 @@ class DAggerTrainer:
         self.beta_schedule = beta_schedule
         self.scratch_dir = scratch_dir
         self.env = env
+        self.samples_so_far = 0
+        self.batch_num = 0
+        self.epoch_num = 0
         self.round_num = 0
         self.bc_kwargs = bc_kwargs
         self._last_loaded_round = -1
         self._all_demos = []
 
-        bc_kwargs["policy"] = policy
-
-        self.bc_trainer = bc_old.BC(
+        self.bc_trainer = bc.BC(
             self.env.observation_space, self.env.action_space, **self.bc_kwargs
         )
 
@@ -320,6 +340,7 @@ class DAggerTrainer:
 
     def extend_and_update(self, **train_kwargs) -> int:
         """Extend internal batch of data and train.
+
         Specifically, this method will load new transitions (if necessary), train
         the model for a while, and advance the round counter. If there are no fresh
         demonstrations in the demonstration directory for the current round, then
@@ -328,21 +349,35 @@ class DAggerTrainer:
         `.get_trajectory_collector()` and use the returned
         `InteractiveTrajectoryCollector` to produce a new set of demonstrations for
         the current interaction round.
+
         Arguments:
             **train_kwargs: arguments to pass to `BC.train()`.
+
         Returns:
             round_num: new round number after advancing the round counter.
         """
         logging.info("Loading demonstrations")
         self._try_load_demos()
         logging.info(f"Training at round {self.round_num}")
-        self.bc_trainer.train(**train_kwargs)
+        train_kwargs.update(
+            {
+                "samples_so_far": self.samples_so_far,
+                "batch_num": self.batch_num,
+                "epoch_num": self.epoch_num,
+            }
+        )
+        samples_so_far, batch_num, epoch_num = self.bc_trainer.train(**train_kwargs)
+        self.samples_so_far += samples_so_far
+        self.batch_num += batch_num
+        self.epoch_num += epoch_num
         self.round_num += 1
+
         logging.info(f"New round number is {self.round_num}")
         return self.round_num
 
     def get_trajectory_collector(self) -> InteractiveTrajectoryCollector:
         """Create trajectory collector to extend current round's demonstration set.
+
         Returns:
             collector: an `InteractiveTrajectoryCollector` configured with the
                 appropriate beta, appropriate imitator policy, etc. for the current
@@ -367,11 +402,13 @@ class DAggerTrainer:
 
     def save_trainer(self) -> Tuple[str, str]:
         """Create a snapshot of trainer in the scratch/working directory.
+
         The created snapshot can be reloaded with `.reconstruct_trainer()`.
         In addition to saving one copy of the policy in the trainer snapshot, this
         method saves a second copy of the policy in its own file. Having a second copy
         of the policy is convenient because it can be loaded on its own and passed to
         evaluation routines for other algorithms.
+
         Returns:
             checkpoint_path: a path to one of the created `DAggerTrainer` checkpoints.
             policy_path: a path to one of the created `DAggerTrainer` policies.
@@ -398,6 +435,7 @@ class DAggerTrainer:
 
     def save_policy(self, policy_path: str) -> None:
         """Save the current policy only (and not the rest of the trainer).
+
         Args:
             policy_path: path to save policy to.
         """

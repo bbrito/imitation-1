@@ -17,7 +17,7 @@ from imitation.data import buffer, types, wrappers
 from imitation.rewards import common as rew_common
 from imitation.rewards import discrim_nets, reward_nets
 from imitation.util import logger, reward_wrapper, util
-from imitation.algorithms import dagger_old
+from imitation.algorithms import dagger
 from stable_baselines3.common.vec_env import VecEnv
 
 import imitating_games as ig
@@ -586,7 +586,7 @@ class BCGAIL(AdversarialTrainer):
         expert_data: Union[Iterable[Mapping], types.Transitions],
         expert_batch_size: int,
         gen_algo: on_policy_algorithm.OnPolicyAlgorithm,
-        dagger: bool,
+        dagger_flag: bool,
         n_warm_start_rounds: int,
         n_rollouts_per_round: int,
         n_training_epochs_per_round: int,
@@ -623,7 +623,7 @@ class BCGAIL(AdversarialTrainer):
         self.n_rollouts_per_round = n_rollouts_per_round
         self.n_training_epochs_per_round = n_training_epochs_per_round
         self.eval_seeds = eval_seeds
-        self.dagger = dagger
+        self.dagger_flag = dagger_flag
         self.n_warm_start_rounds = n_warm_start_rounds
 
         self.save_path = save_path
@@ -634,7 +634,7 @@ class BCGAIL(AdversarialTrainer):
 
         self.expert_policy = ig.GameSolverExpertPolicy(self.game_env)
 
-        self.dagger_trainer = dagger_old.DAggerTrainer(self.game_env, save_path, policy=gen_algo.policy)
+        self.dagger_trainer = dagger.DAggerTrainer(self.game_env, save_path, policy=gen_algo.policy)
 
     def train(
         self,
@@ -666,11 +666,12 @@ class BCGAIL(AdversarialTrainer):
         )
 
 
-        if self.dagger:
+        if self.dagger_flag:
             # warm start with dagger
             # Dagger training
+            print('dagger')
             for r in tqdm.tqdm(range(0, self.n_warm_start_rounds), desc="round"):
-                self.collector = self.dagger_trainer.get_trajectory_collector()
+                self.collector = self.dagger_trainer.get_trajectory_collector(beta= None)
 
                 for _ in range(self.n_rollouts_per_round):
                     obs = self.collector.reset()
@@ -721,6 +722,7 @@ class BCGAIL(AdversarialTrainer):
 
                 logger.dump(r+1)
 
+        print('gail')
         for k in tqdm.tqdm(range(0, n_rounds), desc="round"):
 
 
