@@ -411,8 +411,8 @@ class AdversarialTrainer:
         )
         for r in tqdm.tqdm(range(0, n_rounds), desc="round"):
             self.train_gen(self.gen_batch_size)
-            #for _ in range(self.n_disc_updates_per_round):
-            #    self.train_disc()
+            for _ in range(self.n_disc_updates_per_round):
+                self.train_disc()
             if callback:
                 callback(r)
 
@@ -421,7 +421,7 @@ class AdversarialTrainer:
             all_rewards = []
             for seed in eval_seeds:
                 env.seed(seed)
-                this_rewards, _ = evaluation_old.evaluate_policy(
+                this_rewards, _ = evaluation.evaluate_policy(
                     self.gen_algo, env.envs[0].env, return_episode_rewards=True, n_eval_episodes=2
                 )
                 all_rewards += this_rewards

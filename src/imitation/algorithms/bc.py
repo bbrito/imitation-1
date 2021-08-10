@@ -354,7 +354,7 @@ class BC:
             loss.backward()
             self.optimizer.step()
 
-            if self.disc_policy is not None:
+            #if self.disc_policy is not None:
 
             if batch_num % log_interval == 0:
                 for stats in [stats_dict_it, stats_dict_loss]:
