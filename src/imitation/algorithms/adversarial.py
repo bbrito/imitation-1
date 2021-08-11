@@ -715,6 +715,9 @@ class BCGAIL(AdversarialTrainer):
                                             'rewards':expert_samples[4]}
 
 
+
+                    self.train_disc(expert_samples=expert_samples_dict , gen_samples=policy_samples_dict)
+
                 expert_rewards = evaluate_policy(self.expert_policy, self.game_env, self.eval_seeds)
                 imitation_rewards = evaluate_policy(self.gen_algo.policy, self.game_env, self.eval_seeds)
                 reward_gaps = [e - i for e, i in zip(expert_rewards, imitation_rewards)]
