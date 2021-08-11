@@ -18,10 +18,10 @@ from stable_baselines3.common import utils
 from torch.utils import data as th_data
 
 from imitation.algorithms import bc
-from imitation.data import rollout, types
+from imitation.data import rollout, types,wrappers
 from imitation.util import util
 from imitation.rewards import discrim_nets
-from stable_baselines3.common import logger, policies, utils
+from stable_baselines3.common import logger, policies, utils, buffers
 
 from imitation.policies import base
 
@@ -132,6 +132,14 @@ class InteractiveTrajectoryCollector(gym.Wrapper):
         self._is_reset = False
 
         # TODO: Creatae two buffer replay
+        self._policy_replay_buffer = buffers.ReplayBuffer(
+            2000, self.observation_space, self.action_space
+        )
+
+        self._exp_replay_buffer = buffers.ReplayBuffer(
+            2000, self.observation_space, self.action_space
+        )
+
 
     def reset(self) -> np.ndarray:
         """Resets the environment.
@@ -162,22 +170,28 @@ class InteractiveTrajectoryCollector(gym.Wrapper):
         assert self._is_reset, "call .reset() before .step()"
 
         # Replace the given action with a robot action 100*(1-beta)% of the time.
+        policy_act = self.get_robot_act(self._last_obs)
         if np.random.uniform(0, 1) > self.beta:
-            actual_act = self.get_robot_act(self._last_obs)
+            actual_act = policy_act
         else:
             actual_act = user_action
 
         # actually step the env & record data as appropriate
         next_obs, reward, done, info = self.env.step(actual_act)
-        info['actual_act'] = actual_act
+
+
+        # TODO: Save data to warm-start discriminator
+        self._policy_replay_buffer.add(obs = self._last_obs, next_obs = next_obs, action = policy_act, reward=reward, done = done)
+
+        self._exp_replay_buffer.add(obs = self._last_obs, next_obs = next_obs, action = user_action, reward=reward, done = done)
+
+
         self._last_obs = next_obs
         self.traj_accum.add_step(
             {"acts": user_action, "obs": next_obs, "rews": reward, "infos": info}
         )
 
-        # TODO: Save data to warm-start discriminator
-        _gen_buffer.add(self._last_obs, actions, rewards, self._last_dones, values, log_probs)
-        _exp_buffer.add(self._last_obs, actions, rewards, self._last_dones, values, log_probs)
+
 
         # if we're finished, then save the trajectory & print a message
         if done and not self._done_before:

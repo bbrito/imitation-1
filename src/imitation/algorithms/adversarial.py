@@ -270,6 +270,10 @@ class AdversarialTrainer:
             gen_replay_buffer_capacity, self.venv
         )
 
+        self._policy_replay_buffer = buffer.ReplayBuffer(
+            gen_replay_buffer_capacity, self.venv
+        )
+
     def _next_expert_batch(self) -> Mapping:
         return next(self._endless_expert_iterator)
 
@@ -628,7 +632,9 @@ class BCGAIL(AdversarialTrainer):
 
         self.save_path = save_path
 
+
         self.game_env = venv.envs[0].env
+
 
         self.env = venv.envs[0].env
 
@@ -666,17 +672,20 @@ class BCGAIL(AdversarialTrainer):
             f"total_timesteps={total_timesteps})!"
         )
 
-
+        r = 0
         if self.dagger_flag:
             # warm start with dagger
             # Dagger training
             print('dagger')
             for r in tqdm.tqdm(range(0, self.n_warm_start_rounds), desc="round"):
-                # TODO: RESET
-                self.collector._gen_rollout_buffer.reset()
-                self.collector._exp_rollout_buffer.reset()
+
 
                 self.collector = self.dagger_trainer.get_trajectory_collector(beta= None)
+                self.collector.venv_train = self.venv_train
+
+                # TODO: RESET
+                #self.collector._policy_rollout_buffer.reset()
+                #self.collector._exp_rollout_buffer.reset()
 
                 for _ in range(self.n_rollouts_per_round):
                     obs = self.collector.reset()
@@ -691,9 +700,20 @@ class BCGAIL(AdversarialTrainer):
                 self.dagger_trainer.extend_and_update(n_epochs=self.n_training_epochs_per_round)
 
                 # Train discriminator
-                policy_samples = self.collector._gen_replay_buffer.sample(self.expert_batch_size)
-                expert_samples = self.collector._exp_replay_buffer.sample(self.expert_batch_size)
-                self.train_disc(expert_samples, policy_samples)
+                for _ in range(1):
+                    policy_samples = self.collector._policy_replay_buffer.sample(self.expert_batch_size)
+                    policy_samples_dict = {'obs':policy_samples[0] ,
+                                            'next_obs':policy_samples[2],
+                                            'acts':policy_samples[1],
+                                            'dones':np.squeeze(policy_samples[3] ),
+                                            'rewards':policy_samples[4]}
+                    expert_samples = self.collector._exp_replay_buffer.sample(self.expert_batch_size) #
+                    expert_samples_dict = {'obs':expert_samples[0] ,
+                                            'next_obs':expert_samples[2],
+                                            'acts':expert_samples[1],
+                                            'dones':np.squeeze(expert_samples[3]) ,
+                                            'rewards':expert_samples[4]}
+
 
                 expert_rewards = evaluate_policy(self.expert_policy, self.game_env, self.eval_seeds)
                 imitation_rewards = evaluate_policy(self.gen_algo.policy, self.game_env, self.eval_seeds)

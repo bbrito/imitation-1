@@ -344,9 +344,9 @@ class BC:
         batch_num = 0
         for batch, stats_dict_it in it:
             actual_act = []
-            for i in range(0,len(batch["obs"])):
-                actual_act.append(batch["infos"][i]['actual_act'])
-            actual_act = th.Tensor(actual_act)
+            #for i in range(0,len(batch["obs"])):
+            #    actual_act.append(batch["infos"][i]['actual_act'])
+            #actual_act = th.Tensor(actual_act)
 
             loss, stats_dict_loss = self._calculate_loss(batch["obs"], batch["acts"])
 
