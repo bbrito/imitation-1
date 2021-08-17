@@ -136,6 +136,7 @@ class AdversarialTrainer:
         normalize_reward: bool = True,
         disc_opt_cls: Type[th.optim.Optimizer] = th.optim.Adam,
         disc_opt_kwargs: Optional[Mapping] = None,
+        policy_kwargs: Optional[Mapping] = None,
         gen_replay_buffer_capacity: Optional[int] = None,
         init_tensorboard: bool = False,
         init_tensorboard_graph: bool = False,
@@ -235,6 +236,8 @@ class AdversarialTrainer:
         self._disc_opt = self._disc_opt_cls(
             self.discrim_net.parameters(), **self._disc_opt_kwargs
         )
+
+
 
         if self._init_tensorboard:
             logging.info("building summary directory at " + self._log_dir)
@@ -371,6 +374,7 @@ class AdversarialTrainer:
             # Generate rollouts
             self.gen_algo.logger = self.logger
             #self.gen_algo.logger  = logging.getLogger
+
             self.gen_algo.learn(
                 total_timesteps=total_timesteps,
                 reset_num_timesteps=False,
@@ -590,14 +594,17 @@ class BCGAIL(AdversarialTrainer):
         expert_data: Union[Iterable[Mapping], types.Transitions],
         expert_batch_size: int,
         gen_algo: on_policy_algorithm.OnPolicyAlgorithm,
+        policy_kwargs,
         dagger_flag: bool,
-        n_warm_start_rounds: int,
+        n_warm_start_gen: int,
+        n_warm_start_disc: int,
         n_rollouts_per_round: int,
         n_training_epochs_per_round: int,
         n_disc_updates_per_round: int,
         eval_seeds,
         save_path: str,
         *,
+        disc_opt_kwargs: Optional[Mapping] = None,
         # FIXME(sam) pass in discrim net directly; don't ask for kwargs indirectly
         discrim_kwargs: Optional[Mapping] = None,
         **kwargs,
@@ -618,7 +625,7 @@ class BCGAIL(AdversarialTrainer):
             venv.observation_space, venv.action_space, **discrim_kwargs
         )
         super().__init__(
-            venv, gen_algo, discrim, expert_data, expert_batch_size, n_disc_updates_per_round, **kwargs
+            venv, gen_algo, discrim, expert_data, expert_batch_size, n_disc_updates_per_round, disc_opt_kwargs = disc_opt_kwargs, policy_kwargs = policy_kwargs,**kwargs
         )
         #assert (
         #    logger.is_configured()
@@ -628,7 +635,8 @@ class BCGAIL(AdversarialTrainer):
         self.n_training_epochs_per_round = n_training_epochs_per_round
         self.eval_seeds = eval_seeds
         self.dagger_flag = dagger_flag
-        self.n_warm_start_rounds = n_warm_start_rounds
+        self.n_warm_start_gen = n_warm_start_gen
+        self.n_warm_start_disc = n_warm_start_disc
 
         self.save_path = save_path
 
@@ -639,6 +647,9 @@ class BCGAIL(AdversarialTrainer):
         self.env = venv.envs[0].env
 
         self.expert_policy = ig.GameSolverExpertPolicy(self.game_env)
+
+        # TODO nicer solution
+        gen_algo.policy.net_arch = policy_kwargs['net_arch']
 
         self.dagger_trainer = dagger.DAggerTrainer(self.game_env, save_path, policy=gen_algo.policy, disc_policy = discrim)
 
@@ -677,13 +688,13 @@ class BCGAIL(AdversarialTrainer):
             # warm start with dagger
             # Dagger training
             print('dagger')
-            for r in tqdm.tqdm(range(0, self.n_warm_start_rounds), desc="round"):
+            for r in tqdm.tqdm(range(0, self.n_warm_start_gen), desc="round"):
 
 
                 self.collector = self.dagger_trainer.get_trajectory_collector(beta= None)
                 self.collector.venv_train = self.venv_train
 
-                # TODO: RESET
+                # TODO: RESET (reset alreday done by gnerating new collector)
                 #self.collector._policy_rollout_buffer.reset()
                 #self.collector._exp_rollout_buffer.reset()
 
@@ -700,7 +711,7 @@ class BCGAIL(AdversarialTrainer):
                 self.dagger_trainer.extend_and_update(n_epochs=self.n_training_epochs_per_round)
 
                 # Train discriminator
-                for _ in range(1):
+                for _ in range(self.n_warm_start_disc):
                     policy_samples = self.collector._policy_replay_buffer.sample(self.expert_batch_size)
                     policy_samples_dict = {'obs':policy_samples[0] ,
                                             'next_obs':policy_samples[2],
@@ -714,8 +725,7 @@ class BCGAIL(AdversarialTrainer):
                                             'dones':np.squeeze(expert_samples[3]) ,
                                             'rewards':expert_samples[4]}
 
-
-
+                    self._disc_step = r + 1
                     self.train_disc(expert_samples=expert_samples_dict , gen_samples=policy_samples_dict)
 
                 expert_rewards = evaluate_policy(self.expert_policy, self.game_env, self.eval_seeds)
@@ -828,7 +838,6 @@ class AIRL(AdversarialTrainer):
         Most parameters are described in and passed to `AdversarialTrainer.__init__`.
         Additional parameters that `AIRL` adds on top of its superclass initializer are
         as follows:
-
         Args:
             reward_net_cls: Reward network constructor. The reward network is part of
                 the AIRL discriminator.
