@@ -567,6 +567,9 @@ class BC_GAIL_AIRL(AdversarialTrainer):
 
         self.dagger_trainer = dagger.DAggerTrainer(self.game_env, save_path, policy=gen_algo.policy, disc_policy = discrim)
 
+        # Set the same network policy as used by GAIL
+        self.dagger_trainer.bc_trainer.policy = gen_algo.policy
+
 
     def train(
         self,
