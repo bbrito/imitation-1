@@ -206,22 +206,6 @@ class BC:
         self.policy_kwargs.update(policy_kwargs or {})
         self.device = utils.get_device(device)
 
-        """
-        self.policy_kwargs = {}
-
-        
-        self.policy = self.policy_class(
-            self.observation_space,
-            self.action_space,
-            ConstantLRSchedule(),
-            net_arch=[32, 32],
-            **self.policy_kwargs  # pytype:disable=not-instantiable
-        )
-        
-        self.policy = self.policy_class(**self.policy_kwargs).to(
-            self.device
-        )  # pytype: disable=not-instantiable
-        """
         if self.policy is None:
             self.policy = base.FeedForward32Policy(**self.policy_kwargs).to(
                 self.device)
@@ -354,18 +338,12 @@ class BC:
             loss.backward()
             self.optimizer.step()
 
-            #if self.disc_policy is not None:
-
             if batch_num % log_interval == 0:
                 for stats in [stats_dict_it, stats_dict_loss]:
                     for k, v in stats.items():
                         logger.record('dagger/'+ k, v)
                 logger.dump(batch_num)
             batch_num += 1
-
-            #print(batch_num)
-
-
 
     def save_policy(self, policy_path: str) -> None:
         """Save policy to a path. Can be reloaded by `.reconstruct_policy()`.

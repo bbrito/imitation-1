@@ -110,6 +110,8 @@ class InteractiveTrajectoryCollector(gym.Wrapper):
         get_robot_act: Callable[[np.ndarray], np.ndarray],
         beta: float,
         save_dir: str,
+        *,
+        replay_buffer_capacity,
     ):
         """Trajectory collector constructor.
         Args:
@@ -131,14 +133,15 @@ class InteractiveTrajectoryCollector(gym.Wrapper):
         self._done_before = True
         self._is_reset = False
 
-        # TODO: Creatae two buffer replay
-        self._policy_replay_buffer = buffers.ReplayBuffer(
-            2000, self.observation_space, self.action_space
-        )
+        # Create two buffers to collect transitions for discrim warmstart
+        if replay_buffer_capacity is not None:
+            self._policy_replay_buffer = buffers.ReplayBuffer(
+                replay_buffer_capacity, self.observation_space, self.action_space
+            )
 
-        self._exp_replay_buffer = buffers.ReplayBuffer(
-            2000, self.observation_space, self.action_space
-        )
+            self._exp_replay_buffer = buffers.ReplayBuffer(
+                replay_buffer_capacity, self.observation_space, self.action_space
+            )
 
 
     def reset(self) -> np.ndarray:
@@ -180,7 +183,7 @@ class InteractiveTrajectoryCollector(gym.Wrapper):
         next_obs, reward, done, info = self.env.step(actual_act)
 
 
-        # TODO: Save data to warm-start discriminator
+        # Save data to warm-start discriminator
         self._policy_replay_buffer.add(obs = self._last_obs, next_obs = next_obs, action = policy_act, reward=reward, done = done)
 
         self._exp_replay_buffer.add(obs = self._last_obs, next_obs = next_obs, action = user_action, reward=reward, done = done)
@@ -190,8 +193,6 @@ class InteractiveTrajectoryCollector(gym.Wrapper):
         self.traj_accum.add_step(
             {"acts": user_action, "obs": next_obs, "rews": reward, "infos": info}
         )
-
-
 
         # if we're finished, then save the trajectory & print a message
         if done and not self._done_before:
@@ -293,9 +294,6 @@ class DAggerTrainer:
             self.env.observation_space, self.env.action_space, **self.bc_kwargs
         )
 
-
-
-
     def _load_all_demos(self):
         num_demos_by_round = []
         for round_num in range(self._last_loaded_round + 1, self.round_num + 1):
@@ -369,7 +367,7 @@ class DAggerTrainer:
         logging.info(f"New round number is {self.round_num}")
         return self.round_num
 
-    def get_trajectory_collector(self, beta = None) -> InteractiveTrajectoryCollector:
+    def get_trajectory_collector(self, beta = None, replay_buffer_capacity = None) -> InteractiveTrajectoryCollector:
         """Create trajectory collector to extend current round's demonstration set.
         Returns:
             collector: an `InteractiveTrajectoryCollector` configured with the
@@ -391,7 +389,7 @@ class DAggerTrainer:
             return act
 
         collector = InteractiveTrajectoryCollector(
-            env=self.env, get_robot_act=get_robot_act, beta=beta, save_dir=save_dir
+            env=self.env, get_robot_act=get_robot_act, beta=beta, save_dir=save_dir, replay_buffer_capacity = replay_buffer_capacity
         )
 
         return collector

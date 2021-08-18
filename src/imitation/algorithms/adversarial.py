@@ -19,88 +19,9 @@ from imitation.rewards import discrim_nets, reward_nets
 from imitation.util import logger, reward_wrapper, util
 from imitation.algorithms import dagger
 from stable_baselines3.common.vec_env import VecEnv
-
-import imitating_games as ig
 from os import path
 from pathlib import Path
 
-def evaluate_policy(policy, env, seeds, log_dir=None, basename=None):
-    """
-    Evaluates the `policy` on a given `env` for a set of `seeds` and returns a list of rewards of all
-    rollouts. If `log_dir` and `basename` are given then a visualization of the rollout (as VegaLite
-    html) will be stored to the `log_dir`.
-    """
-    all_rewards = []
-
-    for seed in seeds:
-        env.seed(seed)
-        this_rewards, _ = evaluation.evaluate_policy(
-            policy, env, return_episode_rewards=True, n_eval_episodes=2
-        )
-        if log_dir is not None and basename is not None:
-            rollout_path = path.join(log_dir, "eval")
-            Path(rollout_path).mkdir(parents=True, exist_ok=True)
-            viz = env.render()
-            viz.properties(width=500, height=500).save(
-                path.join(rollout_path, f"{basename}-{seed}.html")
-            )
-        all_rewards += this_rewards
-
-    return all_rewards
-
-def rollout_actions(
-    model: "base_class.BaseAlgorithm",
-    env: Union[gym.Env, VecEnv],
-    n_eval_episodes: int = 10,
-    deterministic: bool = True,
-    render: bool = False,
-    callback: Optional[Callable] = None,
-    reward_threshold: Optional[float] = None,
-    return_episode_rewards: bool = False,
-) -> Union[Tuple[float, float], Tuple[List[float], List[int]]]:
-    """
-    Runs policy for ``n_eval_episodes`` episodes and returns average reward.
-    This is made to work only with one env.
-
-    :param model: The RL agent you want to evaluate.
-    :param env: The gym environment. In the case of a ``VecEnv``
-        this must contain only one environment.
-    :param n_eval_episodes: Number of episode to evaluate the agent
-    :param deterministic: Whether to use deterministic or stochastic actions
-    :param render: Whether to render the environment or not
-    :param callback: callback function to do additional checks,
-        called after each step.
-    :param reward_threshold: Minimum expected reward per episode,
-        this will raise an error if the performance is not met
-    :param return_episode_rewards: If True, a list of reward per episode
-        will be returned instead of the mean.
-    :return: Mean reward per episode, std of reward per episode
-        returns ([float], [int]) when ``return_episode_rewards`` is True
-    """
-    if isinstance(env, VecEnv):
-        assert env.num_envs == 1, "You must pass only one environment when using this function"
-
-    episode_actions, episode_lengths = [], []
-    for i in range(n_eval_episodes):
-        # Avoid double reset, as VecEnv are reset automatically
-        if not isinstance(env, VecEnv) or i == 0:
-            obs = env.reset()
-        done, state = False, None
-        episode_action = []
-        episode_length = 0
-        while not done:
-            action, state = model.predict(obs, state=state, deterministic=deterministic)
-            obs, reward, done, _info = env.step(action)
-            episode_action.append(action)
-            if callback is not None:
-                callback(locals(), globals())
-            episode_length += 1
-            if render:
-                env.render()
-        episode_actions.append(episode_action)
-        episode_lengths.append(episode_length)
-
-    return episode_actions
 
 class AdversarialTrainer:
     """Base class for adversarial imitation learning algorithms like GAIL and AIRL."""
@@ -119,9 +40,6 @@ class AdversarialTrainer:
     If `debug_use_ground_truth=True` was passed into the initializer then
     `self.venv_train` is the same as `self.venv`."""
 
-    discrim_net: discrim_nets.DiscrimNet
-    """The discriminator network."""
-
     def __init__(
         self,
         venv: vec_env.VecEnv,
@@ -129,14 +47,15 @@ class AdversarialTrainer:
         discrim_net: discrim_nets.DiscrimNet,
         expert_data: Union[Iterable[Mapping], types.Transitions],
         expert_batch_size: int,
-        n_disc_updates_per_round: int = 1,
+        n_disc_updates_per_round: int = 2,
         *,
         log_dir: str = "output/",
         normalize_obs: bool = True,
         normalize_reward: bool = True,
+        policy_kwargs: Optional[Mapping] = None,
+        policy_opt_kwargs: Optional[Mapping] = None,
         disc_opt_cls: Type[th.optim.Optimizer] = th.optim.Adam,
         disc_opt_kwargs: Optional[Mapping] = None,
-        policy_kwargs: Optional[Mapping] = None,
         gen_replay_buffer_capacity: Optional[int] = None,
         init_tensorboard: bool = False,
         init_tensorboard_graph: bool = False,
@@ -173,6 +92,8 @@ class AdversarialTrainer:
             log_dir: Directory to store TensorBoard logs, plots, etc. in.
             normalize_obs: Whether to normalize observations with `VecNormalize`.
             normalize_reward: Whether to normalize rewards with `VecNormalize`.
+            policy_kwargs: Optional keyword arguments to use while constructing the generator network
+            policy_opt_kwargs: Parameters for generator training.
             disc_opt_cls: The optimizer for discriminator training.
             disc_opt_kwargs: Parameters for discriminator training.
             gen_replay_buffer_capacity: The capacity of the
@@ -238,7 +159,6 @@ class AdversarialTrainer:
         )
 
 
-
         if self._init_tensorboard:
             logging.info("building summary directory at " + self._log_dir)
             summary_dir = os.path.join(self._log_dir, "summary")
@@ -273,9 +193,6 @@ class AdversarialTrainer:
             gen_replay_buffer_capacity, self.venv
         )
 
-        self._policy_replay_buffer = buffer.ReplayBuffer(
-            gen_replay_buffer_capacity, self.venv
-        )
 
     def _next_expert_batch(self) -> Mapping:
         return next(self._endless_expert_iterator)
@@ -309,6 +226,7 @@ class AdversarialTrainer:
         Returns:
            dict: Statistics for discriminator (e.g. loss, accuracy).
         """
+
         with logger.accumulate_means("disc"):
             # optionally write TB summaries for collected ops
             write_summaries = self._init_tensorboard and self._global_step % 20 == 0
@@ -377,8 +295,6 @@ class AdversarialTrainer:
                 total_timesteps=total_timesteps,
                 reset_num_timesteps=False,
                 callback=self.gen_callback,
-                #save_path = self.save_path,
-                #global_step = self._global_step,
                 **learn_kwargs,
             )
             self._global_step += 1
@@ -392,7 +308,7 @@ class AdversarialTrainer:
         self,
         total_timesteps: int,
         callback: Optional[Callable[[int], None]] = None,
-        expert_rewards= None, env = None, eval_seeds = None) -> None:
+    ) -> None:
         """Alternates between training the generator and discriminator.
 
         Every "round" consists of a call to `train_gen(self.gen_batch_size)`,
@@ -421,27 +337,7 @@ class AdversarialTrainer:
                 self.train_disc()
             if callback:
                 callback(r)
-
             logger.dump(self._global_step)
-            # add Lasses evaluation
-            all_rewards = []
-            if eval_seeds is not None:
-                for seed in eval_seeds:
-                    env.seed(seed)
-                    this_rewards, _ = evaluation.evaluate_policy(
-                        self.gen_algo, env.envs[0].env, return_episode_rewards=True, n_eval_episodes=2
-                    )
-                    all_rewards += this_rewards
-                imitation_rewards = all_rewards
-                reward_gaps = [e - i for e, i in zip(expert_rewards, imitation_rewards)]
-                logger.record("comparable_measures/imitation_reward", np.mean(imitation_rewards))
-                logger.record("comparable_measures/mean_reward_gap", np.mean(reward_gaps))
-                logger.dump(r)
-                print("imitation_reward: ", np.mean(imitation_rewards))
-                print("mean_reward_gap: ", np.mean(reward_gaps))
-
-
-
 
     def _torchify_array(self, ndarray: np.ndarray, **kwargs) -> th.Tensor:
         return th.as_tensor(ndarray, device=self.discrim_net.device(), **kwargs)
@@ -494,7 +390,6 @@ class AdversarialTrainer:
         # Guarantee that Mapping arguments are in mutable form.
         expert_samples = dict(expert_samples)
         gen_samples = dict(gen_samples)
-        #
 
         # Convert applicable Tensor values to NumPy.
         for field in dataclasses.fields(types.Transitions):
@@ -586,14 +481,15 @@ class GAIL(AdversarialTrainer):
 
         self.save_path = save_path
 
-class BCGAIL(AdversarialTrainer):
+class BC_GAIL_AIRL(AdversarialTrainer):
     def __init__(
         self,
         venv: vec_env.VecEnv,
+        expert_policy,
         expert_data: Union[Iterable[Mapping], types.Transitions],
         expert_batch_size: int,
+        algo: str,
         gen_algo: on_policy_algorithm.OnPolicyAlgorithm,
-        policy_kwargs,
         dagger_flag: bool,
         n_warm_start_gen: int,
         n_warm_start_disc: int,
@@ -603,9 +499,12 @@ class BCGAIL(AdversarialTrainer):
         eval_seeds,
         save_path: str,
         *,
-        disc_opt_kwargs: Optional[Mapping] = None,
         # FIXME(sam) pass in discrim net directly; don't ask for kwargs indirectly
+        policy_kwargs,
+        reward_net_cls: Type[reward_nets.RewardNet] = reward_nets.BasicShapedRewardNet,
+        reward_net_kwargs: Optional[Mapping] = None,
         discrim_kwargs: Optional[Mapping] = None,
+        disc_opt_kwargs: Optional[Mapping] = None,
         **kwargs,
     ):
         """Generative Adversarial Imitation Learning.
@@ -620,16 +519,30 @@ class BCGAIL(AdversarialTrainer):
 
         """
 
+        if algo is 'gail':
+            discrim_kwargs = discrim_kwargs or {}
+            discrim = discrim_nets.DiscrimNetGAIL(
+                venv.observation_space, venv.action_space, **discrim_kwargs
+            )
+        elif algo is 'airl':
+            reward_net_kwargs = reward_net_kwargs or {}
+            reward_network = reward_net_cls(
+                action_space=venv.action_space,
+                observation_space=venv.observation_space,
+                # pytype is afraid that we'll directly call RewardNet() which is an abstract
+                # class, hence the disable.
+                **reward_net_kwargs,  # pytype: disable=not-instantiable
+            )
 
-        discrim_kwargs = discrim_kwargs or {}
-        discrim = discrim_nets.DiscrimNetGAIL(
-            venv.observation_space, venv.action_space, **discrim_kwargs
-        )
 
+            discrim_kwargs = discrim_kwargs or {}
+            discrim = discrim_nets.DiscrimNetAIRL(reward_network, **discrim_kwargs)
+        else: raise Exception('choose either gail or airl')
 
         super().__init__(
-            venv, gen_algo, discrim, expert_data, expert_batch_size, n_disc_updates_per_round, disc_opt_kwargs = disc_opt_kwargs, policy_kwargs = policy_kwargs,**kwargs
+            venv, gen_algo, discrim, expert_data, expert_batch_size, n_disc_updates_per_round, policy_kwargs = policy_kwargs, disc_opt_kwargs = disc_opt_kwargs, **kwargs
         )
+
 
 
         self.n_rollouts_per_round = n_rollouts_per_round
@@ -640,14 +553,14 @@ class BCGAIL(AdversarialTrainer):
         self.n_warm_start_disc = n_warm_start_disc
 
         self.save_path = save_path
-
+        self.algo = algo
 
         self.game_env = venv.envs[0].env
 
 
         self.env = venv.envs[0].env
 
-        self.expert_policy = ig.GameSolverExpertPolicy(self.game_env)
+        self.expert_policy = expert_policy
 
         # TODO nicer solution
         gen_algo.policy.net_arch = policy_kwargs['net_arch']
@@ -658,7 +571,7 @@ class BCGAIL(AdversarialTrainer):
     def train(
         self,
         total_timesteps: int,
-        callback: Optional[Callable[[int], None]] = None,
+        callback,
         env = None) -> None:
         """Alternates between training the generator and discriminator.
 
@@ -692,7 +605,7 @@ class BCGAIL(AdversarialTrainer):
             for r in tqdm.tqdm(range(0, self.n_warm_start_gen), desc="round"):
 
 
-                self.collector = self.dagger_trainer.get_trajectory_collector(beta= None)
+                self.collector = self.dagger_trainer.get_trajectory_collector(beta= None, replay_buffer_capacity = 2000)
                 self.collector.venv_train = self.venv_train
 
                 # TODO: RESET (reset alreday done by gnerating new collector)
@@ -729,44 +642,19 @@ class BCGAIL(AdversarialTrainer):
                     self._disc_step = r + 1
                     self.train_disc(expert_samples=expert_samples_dict , gen_samples=policy_samples_dict)
 
-                expert_rewards = evaluate_policy(self.expert_policy, self.game_env, self.eval_seeds)
-                imitation_rewards = evaluate_policy(self.gen_algo.policy, self.game_env, self.eval_seeds)
-                reward_gaps = [e - i for e, i in zip(expert_rewards, imitation_rewards)]
+                if callback:
+                    expert_rewards, _ =callback(policy = self.expert_policy, env =self.game_env,  seeds= self.eval_seeds)
+                    imitation_rewards, imitation_action_errors = callback(policy=self.gen_algo.policy, env=self.game_env, seeds=self.eval_seeds, expert_policy = self.expert_policy)
+                    reward_gaps = [e - i for e, i in zip(expert_rewards, imitation_rewards)]
 
                 logger = self.logger
                 logger.record("comparable_measures/imitation_reward", np.mean(imitation_rewards))
                 logger.record("comparable_measures/mean_reward_gap", np.mean(reward_gaps))
-
-                # Get expert samples to compute MSE Imitation loss
-                mse = []
-                for seed in self.eval_seeds:
-                    self.env.seed(seed)
-                    n_eval_episodes = 2
-                    action_rollout_imitation = rollout_actions(
-                        self.gen_algo, self.env, return_episode_rewards=True, n_eval_episodes=n_eval_episodes
-                    )
-                    self.env.seed(seed)
-                    action_rollout_expert = rollout_actions(
-                        self.expert_policy, self.env, return_episode_rewards=True, n_eval_episodes=n_eval_episodes
-                    )
-
-                    np_actions = np.array([[0] * 2] * 1)
-                    np_exp_actions = np.array([[0] * 2] * 1)
-
-                    for ev in range(0, n_eval_episodes):
-                        np_actions = np.concatenate((np_actions, np.array(action_rollout_imitation[ev])), axis=0)
-                        np_exp_actions = np.concatenate((np_exp_actions, np.array(action_rollout_expert[ev])), axis=0)
-                        mse.append(np.mean(np.abs(np_actions[1:, :] - np_exp_actions[1:, :])))
-
-                mse_all_seeds = np.mean(mse)
-                print("mse warmstart ", mse_all_seeds)
-
-
-                logger.record("comparable_measures/mse_over_10_rollouts", mse_all_seeds)
+                logger.record("comparable_measures/action_mse", np.mean(imitation_action_errors))
 
                 logger.dump(r+1)
 
-        print('gail')
+        print(self.algo)
         for k in tqdm.tqdm(range(0, n_rounds), desc="round"):
 
 
@@ -774,46 +662,21 @@ class BCGAIL(AdversarialTrainer):
             self.train_gen(self.gen_batch_size)
             for _ in range(self.n_disc_updates_per_round):
                self.train_disc()
-            if callback:
-                callback(k)
             logger = self.gen_algo.logger
             logger.dump(r+k+2)
 
+            if callback:
+                expert_rewards, _ = callback(policy=self.expert_policy, env=self.game_env, seeds=self.eval_seeds)
+                imitation_rewards, imitation_action_errors = callback(policy=self.gen_algo.policy, env=self.game_env,
+                                                                      seeds=self.eval_seeds,
+                                                                      expert_policy=self.expert_policy)
+                reward_gaps = [e - i for e, i in zip(expert_rewards, imitation_rewards)]
 
-            # add Lasses evaluation
-            expert_rewards = evaluate_policy(self.expert_policy, self.game_env, self.eval_seeds)
-            imitation_rewards = evaluate_policy(self.gen_algo.policy, self.game_env, self.eval_seeds)
-            reward_gaps = [e - i for e, i in zip(expert_rewards, imitation_rewards)]
             logger.record("comparable_measures/imitation_reward", np.mean(imitation_rewards))
             logger.record("comparable_measures/mean_reward_gap", np.mean(reward_gaps))
-
-            # Get expert samples to compute MSE Imitation loss
-            mse = []
-            for seed in self.eval_seeds:
-                self.env.seed(seed)
-                n_eval_episodes = 2
-                action_rollout_imitation = rollout_actions(
-                    self.gen_algo, self.env, return_episode_rewards=True, n_eval_episodes=n_eval_episodes
-                )
-                self.env.seed(seed)
-                action_rollout_expert = rollout_actions(
-                    self.expert_policy, self.env, return_episode_rewards=True, n_eval_episodes=n_eval_episodes
-                )
-
-                np_actions = np.array([[0]*2]*1)
-                np_exp_actions = np.array([[0]*2]*1)
-
-                for ev in range(0,n_eval_episodes):
-                    np_actions = np.concatenate((np_actions, np.array(action_rollout_imitation[ev])), axis=0)
-                    np_exp_actions = np.concatenate((np_exp_actions, np.array(action_rollout_expert[ev])), axis=0)
-                    mse.append(np.mean(np.abs(np_actions[1:,:] - np_exp_actions[1:,:])))
-
-            mse_all_seeds = np.mean(mse)
-            logger.record("comparable_measures/mse_over_10_rollouts", mse_all_seeds)
+            logger.record("comparable_measures/action_mse", np.mean(imitation_action_errors))
 
             logger.dump(r+k+2)
-            #print("imitation_reward: ", np.mean(imitation_rewards))
-            #print("mean_reward_gap: ", np.mean(reward_gaps))
 
 
 class AIRL(AdversarialTrainer):
@@ -866,245 +729,5 @@ class AIRL(AdversarialTrainer):
         )
 
         self.save_path = save_path
-
-class BCAIRL(AdversarialTrainer):
-    def __init__(
-        self,
-        venv: vec_env.VecEnv,
-        expert_data: Union[Iterable[Mapping], types.Transitions],
-        expert_batch_size: int,
-        gen_algo: on_policy_algorithm.OnPolicyAlgorithm,
-        policy_kwargs,
-        dagger_flag: bool,
-        n_warm_start_gen: int,
-        n_warm_start_disc: int,
-        n_rollouts_per_round: int,
-        n_training_epochs_per_round: int,
-        n_disc_updates_per_round: int,
-        eval_seeds,
-        save_path: str,
-        *,
-        reward_net_cls: Type[reward_nets.RewardNet] = reward_nets.BasicShapedRewardNet,
-        reward_net_kwargs: Optional[Mapping] = None,
-        disc_opt_kwargs: Optional[Mapping] = None,
-        # FIXME(sam) pass in discrim net directly; don't ask for kwargs indirectly
-        discrim_kwargs: Optional[Mapping] = None,
-        **kwargs,
-    ):
-        """Generative Adversarial Imitation Learning.
-
-        Most parameters are described in and passed to `AdversarialTrainer.__init__`.
-        Additional parameters that `GAIL` adds on top of its superclass initializer are
-        as follows:
-
-        Args:
-            discrim_kwargs: Optional keyword arguments to use while constructing the
-                DiscrimNetGAIL.
-
-        """
-
-
-        reward_net_kwargs = reward_net_kwargs or {}
-        reward_network = reward_net_cls(
-            action_space=venv.action_space,
-            observation_space=venv.observation_space,
-            # pytype is afraid that we'll directly call RewardNet() which is an abstract
-            # class, hence the disable.
-            **reward_net_kwargs,  # pytype: disable=not-instantiable
-        )
-
-        discrim_kwargs = discrim_kwargs or {}
-        discrim = discrim_nets.DiscrimNetAIRL(reward_network, **discrim_kwargs)
-
-
-        super().__init__(
-            venv, gen_algo, discrim, expert_data, expert_batch_size, n_disc_updates_per_round, disc_opt_kwargs = disc_opt_kwargs, policy_kwargs = policy_kwargs,**kwargs
-        )
-        #assert (
-        #    logger.is_configured()
-        #), "Requires call to imitation.util.logger.configure"
-
-        self.n_rollouts_per_round = n_rollouts_per_round
-        self.n_training_epochs_per_round = n_training_epochs_per_round
-        self.eval_seeds = eval_seeds
-        self.dagger_flag = dagger_flag
-        self.n_warm_start_gen = n_warm_start_gen
-        self.n_warm_start_disc = n_warm_start_disc
-
-        self.save_path = save_path
-
-
-        self.game_env = venv.envs[0].env
-
-
-        self.env = venv.envs[0].env
-
-        self.expert_policy = ig.GameSolverExpertPolicy(self.game_env)
-
-        # TODO nicer solution
-        gen_algo.policy.net_arch = policy_kwargs['net_arch']
-
-        self.dagger_trainer = dagger.DAggerTrainer(self.game_env, save_path, policy=gen_algo.policy, disc_policy = discrim)
-
-
-    def train(
-        self,
-        total_timesteps: int,
-        callback: Optional[Callable[[int], None]] = None,
-        env = None) -> None:
-        """Alternates between training the generator and discriminator.
-
-        Every "round" consists of a call to `train_gen(self.gen_batch_size)`,
-        a call to `train_disc`, and finally a call to `callback(round)`.
-
-        Training ends once an additional "round" would cause the number of transitions
-        sampled from the environment to exceed `total_timesteps`.
-
-        Args:
-          total_timesteps: An upper bound on the number of transitions to sample
-              from the environment during training.
-          callback: A function called at the end of every round which takes in a
-              single argument, the round number. Round numbers are in
-              `range(total_timesteps // self.gen_batch_size)`.
-        """
-        # todo: shouldn't self.gen_batch_size be 32?
-        n_rounds = total_timesteps // self.gen_batch_size
-
-        assert n_rounds >= 1, (
-            "No updates (need at least "
-            f"{self.gen_batch_size} timesteps, have only "
-            f"total_timesteps={total_timesteps})!"
-        )
-
-        r = 0
-        if self.dagger_flag:
-            # warm start with dagger
-            # Dagger training
-            print('dagger')
-            for r in tqdm.tqdm(range(0, self.n_warm_start_gen), desc="round"):
-
-
-                self.collector = self.dagger_trainer.get_trajectory_collector(beta= None)
-                self.collector.venv_train = self.venv_train
-
-                # TODO: RESET (reset alreday done by gnerating new collector)
-                #self.collector._policy_rollout_buffer.reset()
-                #self.collector._exp_rollout_buffer.reset()
-
-                for _ in range(self.n_rollouts_per_round):
-                    obs = self.collector.reset()
-                    done = False
-                    while not done:
-                        (expert_action,), _ = self.expert_policy.predict(
-                            obs[None],
-                            deterministic=True,
-                        )
-                        obs, _, done, _ = self.collector.step(expert_action)
-
-                self.dagger_trainer.extend_and_update(n_epochs=self.n_training_epochs_per_round)
-
-                # Train discriminator
-                for _ in range(self.n_warm_start_disc):
-                    policy_samples = self.collector._policy_replay_buffer.sample(self.expert_batch_size)
-                    policy_samples_dict = {'obs':policy_samples[0] ,
-                                            'next_obs':policy_samples[2],
-                                            'acts':policy_samples[1],
-                                            'dones':np.squeeze(policy_samples[3] ),
-                                            'rewards':policy_samples[4]}
-                    expert_samples = self.collector._exp_replay_buffer.sample(self.expert_batch_size) #
-                    expert_samples_dict = {'obs':expert_samples[0] ,
-                                            'next_obs':expert_samples[2],
-                                            'acts':expert_samples[1],
-                                            'dones':np.squeeze(expert_samples[3]) ,
-                                            'rewards':expert_samples[4]}
-
-                    self._disc_step = r + 1
-                    self.train_disc(expert_samples=expert_samples_dict , gen_samples=policy_samples_dict)
-
-                expert_rewards = evaluate_policy(self.expert_policy, self.game_env, self.eval_seeds)
-                imitation_rewards = evaluate_policy(self.gen_algo.policy, self.game_env, self.eval_seeds)
-                reward_gaps = [e - i for e, i in zip(expert_rewards, imitation_rewards)]
-
-                logger = self.logger
-                logger.record("comparable_measures/imitation_reward", np.mean(imitation_rewards))
-                logger.record("comparable_measures/mean_reward_gap", np.mean(reward_gaps))
-
-                # Get expert samples to compute MSE Imitation loss
-                mse = []
-                for seed in self.eval_seeds:
-                    self.env.seed(seed)
-                    n_eval_episodes = 2
-                    action_rollout_imitation = rollout_actions(
-                        self.gen_algo, self.env, return_episode_rewards=True, n_eval_episodes=n_eval_episodes
-                    )
-                    self.env.seed(seed)
-                    action_rollout_expert = rollout_actions(
-                        self.expert_policy, self.env, return_episode_rewards=True, n_eval_episodes=n_eval_episodes
-                    )
-
-                    np_actions = np.array([[0] * 2] * 1)
-                    np_exp_actions = np.array([[0] * 2] * 1)
-
-                    for ev in range(0, n_eval_episodes):
-                        np_actions = np.concatenate((np_actions, np.array(action_rollout_imitation[ev])), axis=0)
-                        np_exp_actions = np.concatenate((np_exp_actions, np.array(action_rollout_expert[ev])), axis=0)
-                        mse.append(np.mean(np.abs(np_actions[1:, :] - np_exp_actions[1:, :])))
-
-                mse_all_seeds = np.mean(mse)
-                print("mse warmstart ", mse_all_seeds)
-
-
-                logger.record("comparable_measures/mse_over_10_rollouts", mse_all_seeds)
-
-                logger.dump(r+1)
-
-        print('airl')
-        for k in tqdm.tqdm(range(0, n_rounds), desc="round"):
-
-
-            # RL Training
-            self.train_gen(self.gen_batch_size)
-            for _ in range(self.n_disc_updates_per_round):
-               self.train_disc()
-            if callback:
-                callback(k)
-            logger = self.gen_algo.logger
-            logger.dump(r+k+2)
-
-
-            # add Lasses evaluation
-            expert_rewards = evaluate_policy(self.expert_policy, self.game_env, self.eval_seeds)
-            imitation_rewards = evaluate_policy(self.gen_algo.policy, self.game_env, self.eval_seeds)
-            reward_gaps = [e - i for e, i in zip(expert_rewards, imitation_rewards)]
-            logger.record("comparable_measures/imitation_reward", np.mean(imitation_rewards))
-            logger.record("comparable_measures/mean_reward_gap", np.mean(reward_gaps))
-
-            # Get expert samples to compute MSE Imitation loss
-            mse = []
-            for seed in self.eval_seeds:
-                self.env.seed(seed)
-                n_eval_episodes = 2
-                action_rollout_imitation = rollout_actions(
-                    self.gen_algo, self.env, return_episode_rewards=True, n_eval_episodes=n_eval_episodes
-                )
-                self.env.seed(seed)
-                action_rollout_expert = rollout_actions(
-                    self.expert_policy, self.env, return_episode_rewards=True, n_eval_episodes=n_eval_episodes
-                )
-
-                np_actions = np.array([[0]*2]*1)
-                np_exp_actions = np.array([[0]*2]*1)
-
-                for ev in range(0,n_eval_episodes):
-                    np_actions = np.concatenate((np_actions, np.array(action_rollout_imitation[ev])), axis=0)
-                    np_exp_actions = np.concatenate((np_exp_actions, np.array(action_rollout_expert[ev])), axis=0)
-                    mse.append(np.mean(np.abs(np_actions[1:,:] - np_exp_actions[1:,:])))
-
-            mse_all_seeds = np.mean(mse)
-            logger.record("comparable_measures/mse_over_10_rollouts", mse_all_seeds)
-
-            logger.dump(r+k+2)
-            #print("imitation_reward: ", np.mean(imitation_rewards))
-            #print("mean_reward_gap: ", np.mean(reward_gaps))
 
 
