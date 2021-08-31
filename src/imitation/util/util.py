@@ -3,7 +3,6 @@ import functools
 import itertools
 import os
 import uuid
-import glob
 from typing import (
     Callable,
     Iterable,
@@ -25,7 +24,6 @@ from stable_baselines3.common.policies import ActorCriticPolicy, BasePolicy
 from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv, VecEnv
 
 
-
 def make_unique_timestamp() -> str:
     """Timestamp, with random uuid added to avoid collisions."""
     ISO_TIMESTAMP = "%Y%m%d_%H%M%S"
@@ -33,22 +31,6 @@ def make_unique_timestamp() -> str:
     random_uuid = uuid.uuid4().hex[:6]
     return f"{timestamp}_{random_uuid}"
 
-def get_latest_run_id(log_path, env_id):
-    """
-    Returns the latest run number for the given log name and log path,
-    by finding the greatest number in the directories.
-
-    :param log_path: (str) path to log folder
-    :param env_id: (str)
-    :return: (int) latest run number
-    """
-    max_run_id = 0
-    for path in glob.glob(log_path + "/{}_[0-9]*".format(env_id)):
-        file_name = path.split("/")[-1]
-        ext = file_name.split("_")[-1]
-        if env_id == "_".join(file_name.split("_")[:-1]) and ext.isdigit() and int(ext) > max_run_id:
-            max_run_id = int(ext)
-    return max_run_id
 
 def make_vec_env(
     env_name: str,
@@ -58,8 +40,6 @@ def make_vec_env(
     log_dir: Optional[str] = None,
     max_episode_steps: Optional[int] = None,
     post_wrappers: Optional[Sequence[Callable[[gym.Env, int], gym.Env]]] = None,
-    game_factory = None,
-    protagonist_index = None,
 ) -> VecEnv:
     """Returns a VecEnv initialized with `n_envs` Envs.
 
@@ -93,7 +73,7 @@ def make_vec_env(
         # registering the custom environment in the scope of `make_vec_env` didn't
         # work. For more discussion and hypotheses on this issue see PR #160:
         # https://github.com/HumanCompatibleAI/imitation/pull/160.
-        env = spec.make(game_factory= game_factory, protagonist_index = protagonist_index)
+        env = spec.make()
 
         # Seed each environment with a different, non-sequential seed for diversity
         # (even if caller is passing us sequentially-assigned base seeds). int() is

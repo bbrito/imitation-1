@@ -49,17 +49,13 @@ setup(
     package_dir={"": "src"},
     package_data={"imitation": ["py.typed", "envs/examples/airl_envs/assets/*.xml"]},
     install_requires=[
-        "awscli",
-        "cloudpickle>=0.5.5",
         "gym[classic_control]",
         "matplotlib",
         "numpy>=1.15",
         "torch>=1.4.0",
         "tqdm",
         "scikit-learn>=0.21.2",
-        "stable-baselines3", #~=0.10.0
-        "jax~=0.2.8",
-        "jaxlib~=0.1.59",
+        "stable-baselines3~=0.10.0",
         "sacred~=0.8.1",
         "tensorboard>=1.14",
     ],
@@ -68,6 +64,7 @@ setup(
         # recommended packages for development
         "dev": [
             "autopep8",
+            "awscli",
             "ntfy[slack]",
             "ipdb",
             "isort~=5.0",

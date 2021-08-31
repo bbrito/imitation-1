@@ -9,6 +9,7 @@ from imitation.data import rollout, types
 
 class BufferingWrapper(VecEnvWrapper):
     """Saves transitions of underlying VecEnv.
+
     Retrieve saved transitions using `pop_transitions()`.
     """
 
@@ -81,6 +82,7 @@ class BufferingWrapper(VecEnvWrapper):
 
     def pop_transitions(self) -> types.TransitionsWithRew:
         """Pops recorded transitions, returning them as an instance of Transitions.
+
         Raises a RuntimeError if called when `self.n_transitions == 0`.
         """
         if self.n_transitions == 0:
@@ -99,6 +101,7 @@ class BufferingWrapper(VecEnvWrapper):
 
 class RolloutInfoWrapper(gym.Wrapper):
     """Add the entire episode's rewards and observations to `info` at episode end.
+
     Whenever done=True, `info["rollouts"]` is a dict with keys "obs" and "rews", whose
     corresponding values hold the Numpy arrays containing the raw observations and
     rewards seen during this episode.

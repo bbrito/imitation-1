@@ -31,11 +31,14 @@ class RewardVecEnvWrapper(vec_env.VecEnvWrapper):
         self, venv: vec_env.VecEnv, reward_fn: common.RewardFn, ep_history: int = 100
     ):
         """Uses a provided reward_fn to replace the reward function returned by `step()`.
+
         Automatically resets the inner VecEnv upon initialization. A tricky part
         about this class is keeping track of the most recent observation from each
         environment.
+
         Will also include the previous reward given by the inner VecEnv in the
         returned info dict under the `wrapped_env_rew` key.
+
         Args:
             venv: The VecEnv to wrap.
             reward_fn: A function that wraps takes in vectorized transitions

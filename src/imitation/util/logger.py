@@ -12,6 +12,7 @@ def _build_output_formats(
     format_strs: Sequence[str] = None,
 ) -> Sequence[sb_logger.KVWriter]:
     """Build output formats for initializing a Stable Baselines Logger.
+
     Args:
       folder: Path to directory that logs are written to.
       format_strs: An list of output format strings. For details on available
@@ -29,6 +30,7 @@ class _HierarchicalLogger(sb_logger.Logger):
         format_strs: Sequence[str] = ("stdout", "log", "csv"),
     ):
         """A logger with a context for accumulating mean values.
+
         Args:
           default_logger: The default logger when not in the a `accumulate_means`
             context. Also the logger to which mean values are written to when
@@ -48,18 +50,23 @@ class _HierarchicalLogger(sb_logger.Logger):
     @contextlib.contextmanager
     def accumulate_means(self, subdir: types.AnyPath):
         """Temporarily modifies this _HierarchicalLogger to accumulate means values.
+
         During this context, `self.record(key, value)` writes the "raw" values in
         "{self.default_logger.log_dir}/{subdir}" under the key "raw/{subdir}/{key}".
         At the same time, any call to `self.record` will also accumulate mean values
         on the default logger by calling
         `self.default_logger.record_mean(f"mean/{subdir}/{key}", value)`.
+
         During the context, `self.record(key, value)` will write the "raw" values in
         `"{self.default_logger.log_dir}/subdir"` under the key "raw/{subdir}/key".
+
         After the context exits, calling `self.dump()` will write the means
         of all the "raw" values accumulated during this context to
         `self.default_logger` under keys with the prefix `mean/{subdir}/`
+
         Note that the behavior of other logging methods, `log` and `record_mean`
         are unmodified and will go straight to the default logger.
+
         Args:
           subdir: A string key which determines the `folder` where raw data is
             written and temporary logging prefixes for raw and mean data. Entering
@@ -88,15 +95,15 @@ class _HierarchicalLogger(sb_logger.Logger):
             self._subdir = None
 
     def record(self, key, val, exclude=None):
-        if self.current_logger is not None:
+        if self.current_logger is not None:  # In accumulate_means context.
             assert self._subdir is not None
             raw_key = os.path.join("raw", self._subdir, key)
             self.current_logger.record(raw_key, val, exclude)
 
             mean_key = os.path.join("mean", self._subdir, key)
             self.default_logger.record_mean(mean_key, val, exclude)
-        else:
-            self.default_logger.record_mean(key, val, exclude)
+        else:  # Not in accumulate_means context.
+            self.default_logger.record(key, val, exclude)
 
     @property
     def _logger(self):
@@ -144,8 +151,10 @@ def configure(
     folder: types.AnyPath, format_strs: Optional[Sequence[str]] = None
 ) -> None:
     """Configure Stable Baselines logger to be `accumulate_means()`-compatible.
+
     After this function is called, `stable_baselines3.logger.{configure,reset}()`
     are replaced with stubs that raise RuntimeError.
+
     Args:
         folder: Argument from `stable_baselines3.logger.configure`.
         format_strs: An list of output format strings. For details on available
@@ -178,18 +187,25 @@ def dump(step=0) -> None:
 
 def accumulate_means(subdir_name: types.AnyPath) -> ContextManager:
     """Temporarily redirect record() to a different logger and auto-track kvmeans.
+
     Within this context, the original logger is swapped out for a special logger
     in directory `"{current_logging_dir}/raw/{subdir_name}"`.
+
     The special logger's `stable_baselines3.logger.record(key, val)`, in addition
     to tracking its own logs, also forwards the log to the original logger's
     `.record_mean()` under the key `mean/{subdir_name}/{key}`.
+
     After the context exits, these means can be dumped as usual using
     `stable_baselines3.logger.dump()` or `imitation.util.logger.dump()`.
+
     Note that the behavior of other logging methods, `log` and `record_mean`
     are unmodified and will go straight to the original logger.
+
     This context cannot be nested.
+
     Args:
       subdir_name: A string key for building the logger, as described above.
+
     Returns:
       A context manager.
     """

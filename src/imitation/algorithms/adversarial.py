@@ -1,7 +1,7 @@
 import dataclasses
 import logging
 import os
-from typing import Callable, Dict, Iterable, Mapping, Optional, Type, Union, Tuple, List
+from typing import Callable, Dict, Iterable, Mapping, Optional, Type, Union
 
 import gym
 import numpy as np
@@ -10,17 +10,11 @@ import torch.utils.data as th_data
 import torch.utils.tensorboard as thboard
 import tqdm
 from stable_baselines3.common import on_policy_algorithm, preprocessing, vec_env
-from stable_baselines3.common import utils, evaluation
-from stable_baselines3.ppo import ppo
 
 from imitation.data import buffer, types, wrappers
 from imitation.rewards import common as rew_common
 from imitation.rewards import discrim_nets, reward_nets
 from imitation.util import logger, reward_wrapper, util
-from imitation.algorithms import dagger
-from stable_baselines3.common.vec_env import VecEnv
-from os import path
-from pathlib import Path
 
 
 class AdversarialTrainer:
@@ -40,6 +34,9 @@ class AdversarialTrainer:
     If `debug_use_ground_truth=True` was passed into the initializer then
     `self.venv_train` is the same as `self.venv`."""
 
+    discrim_net: discrim_nets.DiscrimNet
+    """The discriminator network."""
+
     def __init__(
         self,
         venv: vec_env.VecEnv,
@@ -52,8 +49,6 @@ class AdversarialTrainer:
         log_dir: str = "output/",
         normalize_obs: bool = True,
         normalize_reward: bool = True,
-        policy_kwargs: Optional[Mapping] = None,
-        policy_opt_kwargs: Optional[Mapping] = None,
         disc_opt_cls: Type[th.optim.Optimizer] = th.optim.Adam,
         disc_opt_kwargs: Optional[Mapping] = None,
         gen_replay_buffer_capacity: Optional[int] = None,
@@ -92,8 +87,6 @@ class AdversarialTrainer:
             log_dir: Directory to store TensorBoard logs, plots, etc. in.
             normalize_obs: Whether to normalize observations with `VecNormalize`.
             normalize_reward: Whether to normalize rewards with `VecNormalize`.
-            policy_kwargs: Optional keyword arguments to use while constructing the generator network
-            policy_opt_kwargs: Parameters for generator training.
             disc_opt_cls: The optimizer for discriminator training.
             disc_opt_kwargs: Parameters for discriminator training.
             gen_replay_buffer_capacity: The capacity of the
@@ -112,13 +105,13 @@ class AdversarialTrainer:
                 the environment reward with the learned reward. This is useful for
                 sanity checking that the policy training is functional.
         """
+
         assert (
             logger.is_configured()
         ), "Requires call to imitation.util.logger.configure"
         self._global_step = 0
         self._disc_step = 0
         self.n_disc_updates_per_round = n_disc_updates_per_round
-        self.logger = logger
 
         if expert_batch_size <= 0:
             raise ValueError(f"expert_batch_size={expert_batch_size} must be positive.")
@@ -158,7 +151,6 @@ class AdversarialTrainer:
             self.discrim_net.parameters(), **self._disc_opt_kwargs
         )
 
-
         if self._init_tensorboard:
             logging.info("building summary directory at " + self._log_dir)
             summary_dir = os.path.join(self._log_dir, "summary")
@@ -193,7 +185,6 @@ class AdversarialTrainer:
             gen_replay_buffer_capacity, self.venv
         )
 
-
     def _next_expert_batch(self) -> Mapping:
         return next(self._endless_expert_iterator)
 
@@ -226,7 +217,6 @@ class AdversarialTrainer:
         Returns:
            dict: Statistics for discriminator (e.g. loss, accuracy).
         """
-
         with logger.accumulate_means("disc"):
             # optionally write TB summaries for collected ops
             write_summaries = self._init_tensorboard and self._global_step % 20 == 0
@@ -289,8 +279,6 @@ class AdversarialTrainer:
             learn_kwargs = {}
 
         with logger.accumulate_means("gen"):
-            self.gen_algo.logger = self.logger
-
             self.gen_algo.learn(
                 total_timesteps=total_timesteps,
                 reset_num_timesteps=False,
@@ -299,8 +287,6 @@ class AdversarialTrainer:
             )
             self._global_step += 1
 
-
-        # TODO: THERE IS ASO A BUFFER REPLY. TRANSITONS ARE EMPTY
         gen_samples = self.venv_buffering.pop_transitions()
         self._gen_replay_buffer.store(gen_samples)
 
@@ -324,7 +310,6 @@ class AdversarialTrainer:
               single argument, the round number. Round numbers are in
               `range(total_timesteps // self.gen_batch_size)`.
         """
-        # todo: shouldn't self.gen_batch_size be 32?
         n_rounds = total_timesteps // self.gen_batch_size
         assert n_rounds >= 1, (
             "No updates (need at least "
@@ -454,7 +439,6 @@ class GAIL(AdversarialTrainer):
         expert_data: Union[Iterable[Mapping], types.Transitions],
         expert_batch_size: int,
         gen_algo: on_policy_algorithm.OnPolicyAlgorithm,
-        save_path: str,
         *,
         # FIXME(sam) pass in discrim net directly; don't ask for kwargs indirectly
         discrim_kwargs: Optional[Mapping] = None,
@@ -479,208 +463,6 @@ class GAIL(AdversarialTrainer):
             venv, gen_algo, discrim, expert_data, expert_batch_size, **kwargs
         )
 
-        self.save_path = save_path
-
-class BC_GAIL_AIRL(AdversarialTrainer):
-    def __init__(
-        self,
-        venv: vec_env.VecEnv,
-        expert_policy,
-        expert_data: Union[Iterable[Mapping], types.Transitions],
-        expert_batch_size: int,
-        algo: str,
-        gen_algo: on_policy_algorithm.OnPolicyAlgorithm,
-        dagger_flag: bool,
-        n_warm_start_gen: int,
-        n_warm_start_disc: int,
-        n_rollouts_per_round: int,
-        n_training_epochs_per_round: int,
-        n_disc_updates_per_round: int,
-        eval_seeds,
-        save_path: str,
-        *,
-        # FIXME(sam) pass in discrim net directly; don't ask for kwargs indirectly
-        policy_kwargs,
-        reward_net_cls: Type[reward_nets.RewardNet] = reward_nets.BasicShapedRewardNet,
-        reward_net_kwargs: Optional[Mapping] = None,
-        discrim_kwargs: Optional[Mapping] = None,
-        disc_opt_kwargs: Optional[Mapping] = None,
-        **kwargs,
-    ):
-        """Generative Adversarial Imitation Learning.
-
-        Most parameters are described in and passed to `AdversarialTrainer.__init__`.
-        Additional parameters that `GAIL` adds on top of its superclass initializer are
-        as follows:
-
-        Args:
-            discrim_kwargs: Optional keyword arguments to use while constructing the
-                DiscrimNetGAIL.
-
-        """
-
-        if algo is 'gail':
-            discrim_kwargs = discrim_kwargs or {}
-            discrim = discrim_nets.DiscrimNetGAIL(
-                venv.observation_space, venv.action_space, **discrim_kwargs
-            )
-        elif algo is 'airl':
-            reward_net_kwargs = reward_net_kwargs or {}
-            reward_network = reward_net_cls(
-                action_space=venv.action_space,
-                observation_space=venv.observation_space,
-                # pytype is afraid that we'll directly call RewardNet() which is an abstract
-                # class, hence the disable.
-                **reward_net_kwargs,  # pytype: disable=not-instantiable
-            )
-
-
-            discrim_kwargs = discrim_kwargs or {}
-            discrim = discrim_nets.DiscrimNetAIRL(reward_network, **discrim_kwargs)
-        else: raise Exception('choose either gail or airl')
-
-        super().__init__(
-            venv, gen_algo, discrim, expert_data, expert_batch_size, n_disc_updates_per_round, policy_kwargs = policy_kwargs, disc_opt_kwargs = disc_opt_kwargs, **kwargs
-        )
-
-
-
-        self.n_rollouts_per_round = n_rollouts_per_round
-        self.n_training_epochs_per_round = n_training_epochs_per_round
-        self.eval_seeds = eval_seeds
-        self.dagger_flag = dagger_flag
-        self.n_warm_start_gen = n_warm_start_gen
-        self.n_warm_start_disc = n_warm_start_disc
-
-        self.save_path = save_path
-        self.algo = algo
-
-        self.game_env = venv.envs[0].env
-
-
-        self.env = venv.envs[0].env
-
-        self.expert_policy = expert_policy
-
-        # TODO nicer solution
-        gen_algo.policy.net_arch = policy_kwargs['net_arch']
-
-        self.dagger_trainer = dagger.DAggerTrainer(self.game_env, save_path, policy=gen_algo.policy, disc_policy = discrim)
-
-        # Set the same network policy as used by GAIL
-        self.dagger_trainer.bc_trainer.policy = gen_algo.policy
-
-
-    def train(
-        self,
-        total_timesteps: int,
-        callback,
-        env = None) -> None:
-        """Alternates between training the generator and discriminator.
-
-        Every "round" consists of a call to `train_gen(self.gen_batch_size)`,
-        a call to `train_disc`, and finally a call to `callback(round)`.
-
-        Training ends once an additional "round" would cause the number of transitions
-        sampled from the environment to exceed `total_timesteps`.
-
-        Args:
-          total_timesteps: An upper bound on the number of transitions to sample
-              from the environment during training.
-          callback: A function called at the end of every round which takes in a
-              single argument, the round number. Round numbers are in
-              `range(total_timesteps // self.gen_batch_size)`.
-        """
-        # todo: shouldn't self.gen_batch_size be 32?
-        n_rounds = total_timesteps // self.gen_batch_size
-
-        assert n_rounds >= 1, (
-            "No updates (need at least "
-            f"{self.gen_batch_size} timesteps, have only "
-            f"total_timesteps={total_timesteps})!"
-        )
-
-        r = 0
-        if self.dagger_flag:
-            # warm start with dagger
-            # Dagger training
-            print('dagger')
-            for r in tqdm.tqdm(range(0, self.n_warm_start_gen), desc="round"):
-
-
-                self.collector = self.dagger_trainer.get_trajectory_collector(beta= None, replay_buffer_capacity = 2000)
-                self.collector.venv_train = self.venv_train
-
-                # TODO: RESET (reset alreday done by gnerating new collector)
-                #self.collector._policy_rollout_buffer.reset()
-                #self.collector._exp_rollout_buffer.reset()
-
-                for _ in range(self.n_rollouts_per_round):
-                    obs = self.collector.reset()
-                    done = False
-                    while not done:
-                        (expert_action,), _ = self.expert_policy.predict(
-                            obs[None],
-                            deterministic=True,
-                        )
-                        obs, _, done, _ = self.collector.step(expert_action)
-
-                self.dagger_trainer.extend_and_update(n_epochs=self.n_training_epochs_per_round)
-
-                # Train discriminator
-                for _ in range(self.n_warm_start_disc):
-                    policy_samples = self.collector._policy_replay_buffer.sample(self.expert_batch_size)
-                    policy_samples_dict = {'obs':policy_samples[0] ,
-                                            'next_obs':policy_samples[2],
-                                            'acts':policy_samples[1],
-                                            'dones':np.squeeze(policy_samples[3] ),
-                                            'rewards':policy_samples[4]}
-                    expert_samples = self.collector._exp_replay_buffer.sample(self.expert_batch_size) #
-                    expert_samples_dict = {'obs':expert_samples[0] ,
-                                            'next_obs':expert_samples[2],
-                                            'acts':expert_samples[1],
-                                            'dones':np.squeeze(expert_samples[3]) ,
-                                            'rewards':expert_samples[4]}
-
-                    self._disc_step = r + 1
-                    self.train_disc(expert_samples=expert_samples_dict , gen_samples=policy_samples_dict)
-
-                if callback:
-                    expert_rewards, _ =callback(policy = self.expert_policy, env =self.game_env,  seeds= self.eval_seeds)
-                    imitation_rewards, imitation_action_errors = callback(policy=self.gen_algo.policy, env=self.game_env, seeds=self.eval_seeds, expert_policy = self.expert_policy)
-                    reward_gaps = [e - i for e, i in zip(expert_rewards, imitation_rewards)]
-
-                logger = self.logger
-                logger.record("comparable_measures/imitation_reward", np.mean(imitation_rewards))
-                logger.record("comparable_measures/mean_reward_gap", np.mean(reward_gaps))
-                logger.record("comparable_measures/action_mse", np.mean(imitation_action_errors))
-
-                logger.dump(r+1)
-
-        print(self.algo)
-        for k in tqdm.tqdm(range(0, n_rounds), desc="round"):
-
-
-            # RL Training
-            self.train_gen(self.gen_batch_size)
-            for _ in range(self.n_disc_updates_per_round):
-               self.train_disc()
-            logger = self.gen_algo.logger
-            logger.dump(r+k+2)
-
-            if callback:
-                expert_rewards, _ = callback(policy=self.expert_policy, env=self.game_env, seeds=self.eval_seeds)
-                imitation_rewards, imitation_action_errors = callback(policy=self.gen_algo.policy, env=self.game_env,
-                                                                      seeds=self.eval_seeds,
-                                                                      expert_policy=self.expert_policy)
-                reward_gaps = [e - i for e, i in zip(expert_rewards, imitation_rewards)]
-
-            logger.record("comparable_measures/imitation_reward", np.mean(imitation_rewards))
-            logger.record("comparable_measures/mean_reward_gap", np.mean(reward_gaps))
-            logger.record("comparable_measures/action_mse", np.mean(imitation_action_errors))
-
-            logger.dump(r+k+2)
-
 
 class AIRL(AdversarialTrainer):
 
@@ -693,7 +475,6 @@ class AIRL(AdversarialTrainer):
         expert_data: Union[Iterable[Mapping], types.Transitions],
         expert_batch_size: int,
         gen_algo: on_policy_algorithm.OnPolicyAlgorithm,
-        save_path: str,
         *,
         # FIXME(sam): pass in reward net directly, not via _cls and _kwargs
         reward_net_cls: Type[reward_nets.RewardNet] = reward_nets.BasicShapedRewardNet,
@@ -706,6 +487,7 @@ class AIRL(AdversarialTrainer):
         Most parameters are described in and passed to `AdversarialTrainer.__init__`.
         Additional parameters that `AIRL` adds on top of its superclass initializer are
         as follows:
+
         Args:
             reward_net_cls: Reward network constructor. The reward network is part of
                 the AIRL discriminator.
@@ -730,7 +512,3 @@ class AIRL(AdversarialTrainer):
         super().__init__(
             venv, gen_algo, discrim, expert_data, expert_batch_size, **kwargs
         )
-
-        self.save_path = save_path
-
-
